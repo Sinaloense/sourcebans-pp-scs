@@ -2,7 +2,7 @@
 /*************************************************************************
 This file is part of SourceBans++
 
-SourceBans++ (c) 2014-2023 by SourceBans++ Dev Team
+SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
 
 The SourceBans++ Web panel is licensed under a
 Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
@@ -78,14 +78,12 @@ HTML;
 HTML;
             break;
     }
-
-
 }
 
 $theme->assign('steamlogin_show', Config::getBool('config.enablesteamlogin'));
 $theme->assign('redir', "DoLogin('');");
-$theme->left_delimiter  = "-{";
-$theme->right_delimiter = "}-";
+$theme->setLeftDelimiter("-{");
+$theme->setRightDelimiter("}-");
 $theme->display('page_login.tpl');
-$theme->left_delimiter  = "{";
-$theme->right_delimiter = "}";
+$theme->setLeftDelimiter("{");
+$theme->setRightDelimiter("}");

@@ -2,7 +2,7 @@
 /*************************************************************************
 This file is part of SourceBans++
 
-SourceBans++ (c) 2014-2023 by SourceBans++ Dev Team
+SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
 
 The SourceBans++ Web panel is licensed under a
 Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
@@ -153,11 +153,11 @@ $theme->assign('ban_reason', $res['reason']);
 $theme->assign('ban_authid', trim($res['authid']));
 $theme->assign('customreason', (Config::getBool('bans.customreasons')) ? unserialize(Config::get('bans.customreasons')) : false);
 
-$theme->left_delimiter  = "-{";
-$theme->right_delimiter = "}-";
+$theme->setLeftDelimiter('-{');
+$theme->setRightDelimiter('}-');
 $theme->display('page_admin_edit_comms.tpl');
-$theme->left_delimiter  = "{";
-$theme->right_delimiter = "}";
+$theme->setLeftDelimiter('{');
+$theme->setRightDelimiter('}');
 ?>
 <script type="text/javascript">window.addEvent('domready', function(){
 <?=$errorScript?>

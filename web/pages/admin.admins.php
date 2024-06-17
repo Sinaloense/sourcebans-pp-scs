@@ -2,7 +2,7 @@
 /*************************************************************************
 This file is part of SourceBans++
 
-SourceBans++ (c) 2014-2023 by SourceBans++ Dev Team
+SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
 
 The SourceBans++ Web panel is licensed under a
 Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
@@ -202,7 +202,7 @@ if (strlen($next) > 0) {
 
 $pages = ceil($admin_count / $AdminsPerPage);
 if ($pages > 1) {
-    $admin_nav .= '&nbsp;<select onchange="changePage(this,\'A\',\'' . ($_GET['advSearch'] ?? '') . '\',\'' . ($_GET['advType'] ?? '') . '\');">';
+    $admin_nav .= '&nbsp;<select onchange="changePage(this,\'A\',\'' . (isset($_GET['advSearch']) ? $_GET['advSearch'] : '') . '\',\'' . (isset($_GET['advType']) ? $_GET['advType'] : '') . '\');">';
     for ($i = 1; $i <= $pages; $i++) {
         if (isset($_GET['page']) && $i === $_GET['page']) {
             $admin_nav .= '<option value="' . $i . '" selected="selected">' . $i . '</option>';

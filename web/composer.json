@@ -19,9 +19,9 @@
         "vendor-dir": "includes/vendor"
     },
     "require": {
-        "lcobucci/jwt": "~4.2.1",
+        "lcobucci/jwt": "5.3.0",
         "maxmind-db/reader": "~1.0",
-        "smarty/smarty": "~v4.3.0",
+        "smarty/smarty": "~v5.3.0",
         "xpaw/php-source-query-class": "dev-master",
         "adodb/adodb-php": "5.22.7",
         "symfony/mailer": "^6.0",

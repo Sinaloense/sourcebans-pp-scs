@@ -2,7 +2,7 @@
 /*************************************************************************
 This file is part of SourceBans++
 
-SourceBans++ (c) 2014-2023 by SourceBans++ Dev Team
+SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
 
 The SourceBans++ Web panel is licensed under a
 Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
@@ -45,8 +45,8 @@ $theme->assign('web_permissions', BitToString($userbank->GetProperty("extraflags
 $theme->assign('server_permissions', SmFlagsToSb($userbank->GetProperty("srv_flags")));
 $theme->assign('min_pass_len', MIN_PASS_LENGTH);
 
-$theme->left_delimiter  = "-{";
-$theme->right_delimiter = "}-";
+$theme->setLeftDelimiter('-{');
+$theme->setRightDelimiter('}-');
 $theme->display('page_youraccount.tpl');
-$theme->left_delimiter  = "{";
-$theme->right_delimiter = "}";
+$theme->setLeftDelimiter('{');
+$theme->setRightDelimiter('}');
