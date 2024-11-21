@@ -17,7 +17,10 @@ Licensed under CC-BY-NC-SA 3.0
 Page: <http://www.sourcebans.net/> - <http://www.gameconnect.net/>
 *************************************************************************/
 
+use SteamID\SteamID;
+
 global $theme;
+
 if (!defined("IN_SB")) {
     echo "You should not be here. Only follow links!";
     die();
@@ -220,7 +223,20 @@ if (isset($_SESSION["hideinactive"])) {
 
 
 if (isset($_GET['searchText'])) {
-    $search = '%' . trim($_GET['searchText']) . '%';
+    $searchText = trim($_GET['searchText']);
+
+    try {
+        SteamID::init();
+        if (SteamID::isValidID($searchText)) {
+            $conversionResult = SteamID::toSteam2($searchText);
+
+            if ($conversionResult) {
+                $searchText = $conversionResult;
+            }
+        }
+    } catch (Exception $e) { }
+
+    $search = "%{$searchText}%";
 
     // disable ip search if hiding player ips
     $search_ips   = "";
@@ -280,6 +296,18 @@ if (isset($_GET['searchText'])) {
 $advcrit = [];
 if (isset($_GET['advSearch'])) {
     $value = trim($_GET['advSearch']);
+
+    try {
+        SteamID::init();
+        if (SteamID::isValidID($value)) {
+            $conversionResult = SteamID::toSteam2($value);
+
+            if ($conversionResult) {
+                $value = $conversionResult;
+            }
+        }
+    } catch (Exception $e) { }
+
     $type  = $_GET['advType'];
     switch ($type) {
         case "name":
@@ -480,7 +508,17 @@ while (!$res->EOF) {
     }
 
     $data['ban_date']    = Config::time($res->fields['ban_created']);
-    $data['player']      = addslashes($res->fields['player_name']);
+
+    // Fix #1008 - bug: Player Names Contain Unwanted Non-Standard Characters
+    $raw_name = $res->fields['player_name'];
+    $cleaned_name = mb_convert_encoding($raw_name, 'UTF-8', 'UTF-8');
+    $unwanted_sequences = ["\xF3\xA0\x80\xA1"];
+    foreach ($unwanted_sequences as $sequence) {
+        $cleaned_name = str_replace($sequence, '', $cleaned_name);
+    }
+    $cleaned_name = trim($cleaned_name);
+
+    $data['player'] = addslashes($cleaned_name);
     $data['type']        = $res->fields['type'];
     $data['steamid']     = $res->fields['authid'];
     // Fix #900 - Bad SteamID Format broke the page view, so give them an null SteamID.
@@ -647,10 +685,11 @@ while (!$res->EOF) {
 
                 $cdata['comname']    = $commentres->fields['comname'];
                 $cdata['added']      = Config::time($commentres->fields['added']);
-                $cdata['commenttxt'] = htmlspecialchars($commentres->fields['commenttxt']);
-                $cdata['commenttxt'] = str_replace("\n", "<br />", $cdata['commenttxt']);
+                $commentText         = html_entity_decode($commentres->fields['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                $commentText         = encodePreservingBr($commentText);
                 // Parse links and wrap them in a <a href=""></a> tag to be easily clickable
-                $cdata['commenttxt'] = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?\S+)?)?)?)@', '<a href="$1" target="_blank">$1</a>', $cdata['commenttxt']);
+                $commentText = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?\S+)?)?)?)@', '<a href="\$1" target="_blank">\$1</a>', $commentText);
+                $cdata['commenttxt'] = $commentText;
 
                 if (!empty($commentres->fields['edittime'])) {
                     $cdata['edittime'] = Config::time($commentres->fields['edittime']);
@@ -742,7 +781,8 @@ if (isset($_GET["comment"])) {
     if (isset($_GET["cid"])) {
         $_GET["cid"]    = (int) $_GET["cid"];
         $ceditdata      = $GLOBALS['db']->GetRow("SELECT * FROM " . DB_PREFIX . "_comments WHERE cid = '" . $_GET["cid"] . "'");
-        $ctext          = htmlspecialchars($ceditdata['commenttxt']);
+        $ctext          = html_entity_decode($ceditdata['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $ctext          = htmlspecialchars($ctext, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $cotherdataedit = " AND cid != '" . $_GET["cid"] . "'";
     } else {
         $cotherdataedit = "";
@@ -765,10 +805,12 @@ if (isset($_GET["comment"])) {
         $coment               = [];
         $coment['comname']    = $cotherdata->fields['comname'];
         $coment['added']      = Config::time($cotherdata->fields['added']);
-        $coment['commenttxt'] = htmlspecialchars($cotherdata->fields['commenttxt']);
-        $coment['commenttxt'] = str_replace("\n", "<br />", $coment['commenttxt']);
+        $commentText          = html_entity_decode($cotherdata->fields['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $commentText          = encodePreservingBr($commentText);
         // Parse links and wrap them in a <a href=""></a> tag to be easily clickable
-        $coment['commenttxt'] = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?\S+)?)?)?)@', '<a href="$1" target="_blank">$1</a>', $coment['commenttxt']);
+        $commentText = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?\S+)?)?)?)@', '<a href="\$1" target="_blank">\$1</a>', $commentText);
+        $coment['commenttxt'] = $commentText;
+
         if ($cotherdata->fields['editname'] != "") {
             $coment['edittime'] = Config::time($cotherdata->fields['edittime']);
             $coment['editname'] = $cotherdata->fields['editname'];
