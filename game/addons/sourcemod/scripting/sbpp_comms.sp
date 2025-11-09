@@ -43,7 +43,6 @@
 // Do not edit below this line //
 //-----------------------------//
 
-#define PLUGIN_VERSION "1.8.1"
 #define PREFIX "\x04[SourceComms++]\x01 "
 
 //GLOBAL DEFINES
@@ -95,7 +94,7 @@ ConVar CvarPort;
 Database g_hDatabase;
 Database SQLiteDB;
 
-char 
+char
 	ServerIp[24]
 	, ServerPort[7]
 	, DatabasePrefix[10] = "sb"
@@ -111,13 +110,13 @@ char
 
 float RetryTime = 15.0;
 
-bool 
+bool
 	g_bLate
 	, g_bPlayerAuthentified[MAXPLAYERS + 1] // Bots and players with invalid Steam ID format will always be FALSE
 	, g_bPlayerStatus[MAXPLAYERS + 1] // Player block check status
 	, g_bPlayerVerified[MAXPLAYERS + 1]; // Player has been verified into the database
 
-int 
+int
 	iNumReasons
 	, iNumTimes
 	, g_iTimeMinutes[MAX_TIMES]
@@ -134,18 +133,18 @@ int
 
 SMCParser ConfigParser;
 
-Handle 
-	g_hFwd_OnPlayerPunished
-	, g_hFwd_OnPlayerUnpunished
-	, g_hGagExpireTimer[MAXPLAYERS + 1] = { null, ... }
+GlobalForward g_hFwd_OnPlayerPunished
+			, g_hFwd_OnPlayerUnpunished;
+
+Handle g_hGagExpireTimer[MAXPLAYERS + 1] = { null, ... }
 	, g_hMuteExpireTimer[MAXPLAYERS + 1] = { null, ... };
 
 bType g_MuteType[MAXPLAYERS + 1];
-char 
+char
 	g_sMuteAdminName[MAXPLAYERS + 1][MAX_NAME_LENGTH]
 	, g_sMuteReason[MAXPLAYERS + 1][256]
 	, g_sMuteAdminAuth[MAXPLAYERS + 1][64];
-int 
+int
 	g_iMuteTime[MAXPLAYERS + 1]
 	, g_iMuteLength[MAXPLAYERS + 1] // in sec
 	, g_iMuteLevel[MAXPLAYERS + 1]; // immunity level of admin
@@ -156,7 +155,7 @@ char
 	g_sGagAdminName[MAXPLAYERS + 1][MAX_NAME_LENGTH]
 	, g_sGagReason[MAXPLAYERS + 1][256]
 	, g_sGagAdminAuth[MAXPLAYERS + 1][64];
-int 
+int
 	g_iGagTime[MAXPLAYERS + 1]
 	, g_iGagLength[MAXPLAYERS + 1] // in sec
 	, g_iGagLevel[MAXPLAYERS + 1]; // immunity level of admin
@@ -170,7 +169,7 @@ public Plugin myinfo =
 	name = "SourceBans++: SourceComms",
 	author = "Alex, SourceBans++ Dev Team",
 	description = "Advanced punishments management for the Source engine in SourceBans style",
-	version = PLUGIN_VERSION,
+	version = SBPPComms_VERSION,
 	url = "https://sbpp.github.io"
 };
 
@@ -203,7 +202,7 @@ public void OnPluginStart()
 	CvarPort = FindConVar("hostport");
 	g_hServersWhiteList = new ArrayList();
 
-	CreateConVar("sourcecomms_version", PLUGIN_VERSION, _, FCVAR_SPONLY | FCVAR_REPLICATED | FCVAR_NOTIFY);
+	CreateConVar("sourcecomms_version", SBPPComms_VERSION, _, FCVAR_SPONLY | FCVAR_REPLICATED | FCVAR_NOTIFY);
 	AddCommandListener(CommandCallback, "sm_gag");
 	AddCommandListener(CommandCallback, "sm_mute");
 	AddCommandListener(CommandCallback, "sm_silence");
@@ -222,7 +221,7 @@ public void OnPluginStart()
 	#endif
 
 	#if defined DEBUG
-	PrintToServer("Sourcecomms plugin loading. Version %s", PLUGIN_VERSION);
+	PrintToServer("Sourcecomms plugin loading. Version %s", SBPPComms_VERSION);
 	#endif
 
 	// Catch config error
@@ -660,7 +659,7 @@ public Action CommandCallback(int client, const char[] command, int args)
 	if (type <= TYPE_SILENCE)
 		CreateBlock(client, _, _, type, _, sBuffer);
 	else
-		ProcessUnBlock(client, _, type, _, sBuffer);
+		ProcessUnBlock(client, _, type, sBuffer);
 
 	return Plugin_Stop;
 }
@@ -1381,9 +1380,15 @@ public void GotDatabase(Database db, const char[] error, any data)
 	}
 
 	// Set character set to UTF8MB4 in the database
-	char query[128];
-	Format(query, sizeof(query), "SET NAMES utf8mb4");
-	db.Query(Query_ErrorCheck, query);
+	// Use SQL_SetCharset to ensure charset is set synchronously before any operations
+	if (!db.SetCharset("utf8mb4"))
+	{
+		LogError("Failed to set database charset to utf8mb4");
+		// Fallback to async method
+		char query[128];
+		Format(query, sizeof(query), "SET NAMES utf8mb4");
+		db.Query(Query_ErrorCheck, query);
+	}
 
 	// Process queue
 	SQLiteDB.Query(Query_ProcessQueue,
@@ -1878,12 +1883,9 @@ public void Query_VerifyBlock(Database db, DBResultSet results, const char[] err
 
 // TIMER CALL BACKS //
 
-public Action Timer_ClientRecheck(Handle timer, DataPack RetryDP)
+public Action Timer_ClientRecheck(Handle timer, int userid)
 {
-	RetryDP.Reset();
-	int userid = RetryDP.ReadCell();
 	int client = GetClientOfUserId(userid);
-	delete RetryDP;
 
 	if (!client)
 		return Plugin_Stop;
@@ -2150,9 +2152,7 @@ stock void setMute(int client, int length, const char[] clientAuth)
 
 stock void ClientRecheck(int client)
 {
-	DataPack RetryDP = new DataPack();
-	RetryDP.WriteCell(g_iUserIDs[client]);
-	CreateTimer(1.0, Timer_ClientRecheck, RetryDP, TIMER_FLAG_NO_MAPCHANGE);
+	CreateTimer(1.0, Timer_ClientRecheck, g_iUserIDs[client], TIMER_FLAG_NO_MAPCHANGE);
 }
 
 stock bool IsInvalidSteamID(int client)
@@ -2430,10 +2430,10 @@ stock void CreateBlock(int client, int targetId = 0, int length = -1, int type, 
 	return;
 }
 
-stock void ProcessUnBlock(int client, int targetId = 0, int type, char[] sReason = "", const char[] sArgs = "")
+stock void ProcessUnBlock(int client, int targetId = 0, int type, char[] sReason = "")
 {
 	#if defined DEBUG
-	PrintToServer("ProcessUnBlock(admin: %d, target: %d, type: %d, reason: %s, args: %s)", client, targetId, type, sReason, sArgs);
+	PrintToServer("ProcessUnBlock(admin: %d, target: %d, type: %d, reason: %s)", client, targetId, type, sReason);
 	#endif
 
 	int target_list[MAXPLAYERS], target_count;
