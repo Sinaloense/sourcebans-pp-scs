@@ -95,13 +95,14 @@ web/
 │   ├── View/Install/         Sbpp\View\Install\* — install-wizard step DTOs (#1332)
 │   ├── Markup/               Sbpp\Markup\IntroRenderer — admin Markdown -> safe HTML
 │   ├── Servers/              Sbpp\Servers\{SourceQueryCache, RconStatusCache} — per-(ip, port) cache around the xPaw A2S probe (#1311) + per-sid cache around the RCON `status` command (#PLAYER_CTX_MENU)
+│   ├── Upload/               Sbpp\Upload\UploadHandler — shared file-upload handler (perm + CSRF + extension allowlist + filename sanitiser + popup chrome) for the demo / icon / mapimage popup pages (goals#5)
 │   ├── Mail/                 Sbpp\Mail\{Mail,Mailer,EmailType} — Symfony Mailer wrapper + enum
 │   ├── Telemetry/            Sbpp\Telemetry\{Telemetry,Schema1} — anonymous opt-out daily ping (#1126); schema-1.lock.json is the vendored cross-repo contract
 │   ├── SteamID/              SteamID parsing / vanity-URL resolution
 │   ├── PHPStan/              Sbpp\PHPStan\* — custom PHPStan rules (Smarty + SQL prefix)
 │   ├── page-builder.php      route() + build() (the page router; procedural)
 │   ├── system-functions.php  Legacy helpers shared across pages (procedural)
-│   ├── SmartyCustomFunctions.php  {help_icon} / {csrf_field} / {load_template}
+│   ├── SmartyCustomFunctions.php  {csrf_field} / {load_template} / {has_access}
 │   └── vendor/               Composer artifacts (gitignored)
 ├── scripts/              Browser JS (// @ts-check + JSDoc, no bundler)
 │   ├── sb.js                 DOM helpers + sb namespace
@@ -185,7 +186,7 @@ Both scripts include `init.php` first, which performs identical bootstrap.
 6. Reads `configs/permissions/web.json` + `sourcemod.json` and `define()`s
    each flag as a global PHP constant (`ADMIN_OWNER`, `ADMIN_ADD_BAN`, …).
 7. Constructs the global `$theme` (Smarty) with the configured theme dir,
-   registers custom functions (`{csrf_field}`, `{help_icon}`, …), and
+   registers custom functions (`{csrf_field}`, `{load_template}`, `{has_access}`), and
    assigns `csrf_token` / `csrf_field_name` so every rendered page has
    them available.
 
@@ -284,7 +285,7 @@ is reviewable in one place:
 Api::register('bans.add',          'api_bans_add',          ADMIN_OWNER | ADMIN_ADD_BAN);
 Api::register('account.change_email', 'api_account_change_email');  // logged-in only
 Api::register('auth.login',        'api_auth_login',        0, false, true);  // public
-Api::register('admins.update_perms', 'api_admins_update_perms', 0, true);  // any admin
+Api::register('admins.generate_password', 'api_admins_generate_password', 0, true);  // any admin
 ```
 
 Handler functions live in topic-grouped files
@@ -495,40 +496,6 @@ sub-tab (bans, comms, admins, groups, mods, servers, overrides,
 settings, features, themes, logs), the audit log, the ban submission /
 protest forms, the login / your-account forms, the kickit / blockit
 side-modals, the updater, and the upload-icon dialog.
-
-#### Theme-fork compatibility predicates (`Sbpp\Theme`)
-
-A handful of page handlers carry legacy DTO fields that the shipped
-default theme stopped rendering at v2.0.0 (#1146) but third-party
-forks of the pre-v2.0.0 default may still bind to. The fields stay
-assignable — `SmartyTemplateRule` insists they keep matching the
-template's `{if false}` parity reference — but **computing** them is
-work whose only consumer might be a fork. `web/includes/Theme.php`
-(`Sbpp\Theme`) is the single home for the predicates page handlers
-ask before they pay that cost.
-
-The first user (#1270): `\Sbpp\Theme::wantsLegacyAdminCounts()` gates
-the 9-COUNT subquery + the recursive `getDirSize(SB_DEMOS)` walk in
-`web/pages/page.admin.php`. The shipped default theme returns `false`
-(the work is skipped, placeholder zeros / `'0 B'` flow into
-`AdminHomeView`'s legacy fields, the `{if false}` parity reference
-emits no visible output). A fork that still renders the legacy
-counts row opts back in by adding
-
-```php
-define('theme_legacy_admin_counts', true);
-```
-
-to its `theme.conf.php` — same file every theme already declares
-`theme_name` / `theme_author` / `theme_version` in. `Theme.php` also
-exposes a `recordLegacyComputePass()` / `legacyComputeCount()` /
-`resetLegacyComputeCount()` triple the regression test
-(`web/tests/integration/AdminHomePerformanceTest.php`) reads to
-assert default-theme installs really do skip the slow path.
-
-When new compute-paying-for-fork-only-output surfaces show up, add a
-sibling predicate to the same class (one method per legacy surface,
-named `wants<X>()`) so the gate convention stays single-source.
 
 ### Frontend JavaScript (`web/scripts/`)
 
