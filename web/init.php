@@ -47,7 +47,15 @@ define('IN_SB', true);
 require_once(ROOT.'/init-recovery.php');
 
 #DB Config
-if (!file_exists(ROOT.'/config.php')) {
+//
+// `SBPP_CONFIG_PATH` env var (#1381 deliverable 4d): the production
+// Docker image lets operators mount config.php from a Docker secret
+// path outside the read-only image layer. Falls back to the legacy
+// `<panel-root>/config.php` for tarball / wizard installs that don't
+// set the var. See sbpp_resolve_config_path() in init-recovery.php
+// for the contract.
+$sbppConfigPath = sbpp_resolve_config_path(ROOT . 'config.php');
+if (!file_exists($sbppConfigPath)) {
     // M1 bonus: redirect to /install/ instead of a bare-text die.
     // The wizard is the actionable next step for a panel without
     // config.php, so dropping the operator there is strictly more
@@ -58,7 +66,28 @@ if (!file_exists(ROOT.'/config.php')) {
     header('Location: install/');
     exit;
 }
-require_once(ROOT.'/config.php');
+require_once($sbppConfigPath);
+
+// SBPP_TRUSTED_PROXIES (#1381 CRIT-4): operator-defined list of
+// CIDR ranges whose `X-Forwarded-Proto` / `X-Forwarded-For` the
+// panel will trust. Format: whitespace-separated list of IP
+// literals or CIDR ranges (IPv4 + IPv6), e.g.
+// `'10.0.0.0/8 192.168.0.0/16 ::1'`. Empty / undefined disables
+// XFP / XFF consultation entirely.
+//
+// Resolution order:
+//   1. `config.php` `define('SBPP_TRUSTED_PROXIES', ...)` — wins.
+//   2. `SBPP_TRUSTED_PROXIES` env var (the Docker prod image
+//      exports this in `configure_apache`).
+//   3. Empty string — the secure default; `Host::isSecure()`
+//      ignores `X-Forwarded-Proto` and trusts only the
+//      authoritative `$_SERVER['HTTPS']` (which `mod_remoteip`
+//      + `SetEnvIfExpr` populate server-side after the proxy
+//      hop is validated by Apache).
+if (!defined('SBPP_TRUSTED_PROXIES')) {
+    $envProxies = getenv('SBPP_TRUSTED_PROXIES');
+    define('SBPP_TRUSTED_PROXIES', is_string($envProxies) ? $envProxies : '');
+}
 
 // Issue #1335 C1: pre-fix this guard exempted `HTTP_HOST ==
 // "localhost"`, which was a panel-takeover path on any panel
