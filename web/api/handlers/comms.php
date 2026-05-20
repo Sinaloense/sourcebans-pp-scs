@@ -22,16 +22,46 @@ function api_comms_add(array $params): array
     // that Smarty auto-escapes (#1087). Store raw, escape on display.
     $nickname = (string)($params['nickname'] ?? '');
     $type     = (int)($params['type']   ?? 0);
-    $steam    = SteamID::toSteam2(trim((string)($params['steam']  ?? '')));
+    $rawSteam = trim((string)($params['steam'] ?? ''));
     $length   = (int)($params['length'] ?? 0);
     $reason   = (string)($params['reason'] ?? '');
 
-    if (empty($steam)) {
+    // #1420 — validate the SteamID shape BEFORE handing it to
+    // `SteamID::toSteam2()`. The conversion helper calls
+    // `resolveInputID()` internally, which throws a bare `\Exception`
+    // (not an `ApiError`) on any unrecognised shape — that escaped to
+    // the dispatcher's catch-all and surfaced as a generic 500 with
+    // body "An unexpected error occurred. See server logs for
+    // details." instead of the structured `validation`-coded error
+    // shape the chrome's toast can render. The reporter observed it
+    // as "no notification" because the comms add page's tail script
+    // was *also* broken (legacy MooTools `$('id')` selectors against
+    // a global that no longer exists post-#1123 D1), so the API
+    // round-trip never happened — fixing the front-end alone would
+    // have exposed the same 500 the bans-add path also carries.
+    //
+    // The bundled `SteamID::isValidID()` is NOT a sufficient gate on
+    // its own — its regexes are unanchored with loose character
+    // classes (`STEAM_[0|1]:[0:1]:\d*` — note the `|` inside `[...]`
+    // is a literal pipe, not alternation, and the missing `^`/`$`
+    // anchors mean an embedded-SteamID-with-garbage like
+    // `'asdf 76561197960265728 garbage'` matches the substring AND
+    // `toSteam2()` then emits `'STEAM_0:0:-38280598980132864'` (the
+    // negative Z component is the parser eating the surrounding
+    // bytes, the result gets bound into the DB). The strict regex
+    // below mirrors the form template's client-side `pattern`
+    // attribute byte-for-byte (HTML's `pattern` is implicitly
+    // anchored `^…$`), so a curl-driven caller can't smuggle garbage
+    // past the gate that the browser's pattern-mismatch popover
+    // already rejects for form users. Mirror `api_bans_add` /
+    // `api_admins_add` — all three handlers use the same regex.
+    if ($rawSteam === '') {
         throw new ApiError('validation', 'You must type a Steam ID or Community ID', 'steam');
     }
-    if (!SteamID::isValidID($steam)) {
+    if (!preg_match(SteamID::HANDLER_STRICT_REGEX, $rawSteam)) {
         throw new ApiError('validation', 'Please enter a valid Steam ID or Community ID', 'steam');
     }
+    $steam = SteamID::toSteam2($rawSteam);
     if (!in_array($type, [1, 2, 3], true)) {
         throw new ApiError('validation', 'Invalid block type. Must be one of: gag (1), mute (2), or both (3).', 'type');
     }

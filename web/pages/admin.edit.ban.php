@@ -110,24 +110,89 @@ $validationErrors = [];
 $postSuccess = false;
 
 if (isset($_POST['name'])) {
-    $_POST['steam'] = \SteamID\SteamID::toSteam2(trim((string) ($_POST['steam'] ?? '')));
+    // #1420 follow-up #2 — validate the raw Steam ID shape BEFORE the
+    // `SteamID::toSteam2()` conversion. Pre-fix this surface called
+    // `toSteam2()` on the raw POST value as its first statement; on a
+    // garbage input the converter threw `Invalid SteamID input!` from
+    // `resolveInputID()`, the exception escaped the page handler
+    // unhandled, and the user got a generic 500 page render instead of
+    // the inline "Please enter a valid Steam ID or Community ID"
+    // message on the form. The library tightening (follow-up #1) made
+    // the throw stricter (rejecting the `STEAM_0:0:` / substring-bypass
+    // / embedded-Steam64 shapes the old loose regex used to round-trip
+    // verbatim into the DB) which made the 500 page render strictly
+    // MORE frequent on edit-ban. Validate-before-convert puts the
+    // failure on the form as the same per-field message admin-add /
+    // comms-add use.
+    //
+    // The validate-then-convert order also defends the `ip` branch:
+    // pre-fix the form's `Convert ban from IP to Steam ID` path
+    // legitimately passes an empty `steam` while the user fills `ip`
+    // — `toSteam2('')` returns `false` (the `empty()` short-circuit
+    // in `to()`), so this happened to work, but only as an accident
+    // of how the early-return interacts with `empty($_POST['steam'])`
+    // below. Keep the explicit-then-convert shape so a future
+    // refactor of `to()`'s early-return doesn't silently regress.
+    $rawSteam       = trim((string) ($_POST['steam'] ?? ''));
     $_POST['type']  = (int) ($_POST['type'] ?? 0);
     $postBanType    = BanType::tryFrom((int) $_POST['type']) ?? BanType::Steam;
 
     // Form Validation
     $error = 0;
-    // If they didn't type a steamid
-    if (empty($_POST['steam']) && $postBanType === BanType::Steam) {
-        $error++;
-        $validationErrors['steam'] = 'You must type a Steam ID or Community ID';
-    } elseif ($postBanType === BanType::Steam && !\SteamID\SteamID::isValidID($_POST['steam'])) {
-        $error++;
-        $validationErrors['steam'] = 'Please enter a valid Steam ID or Community ID';
-    } elseif (empty($_POST['ip']) && $postBanType === BanType::Ip) {
+    // Steam ID branch — validate raw shape FIRST; convert only on a
+    // pass. Empty input is its own error message; non-empty-but-bad
+    // is "please enter a valid…".
+    //
+    // The IP-type branch writes `:authid = ''` regardless of whatever
+    // happened to be in the Steam ID input. The column is the *steam
+    // id* of the banned player; on an IP-type ban there is no steam
+    // id, so the canonical value is the schema's `NOT NULL default ''`
+    // empty string — matching the API handler (`api_bans_add`'s
+    // INTENT pre-#1423 follow-up #4, fully enforced after that PR)
+    // and matching the v1.x library's "throw on garbage" outcome
+    // (pre-tightening the unconditional `toSteam2($rawSteam)` would
+    // have raised on `garbage` and the page died with a 500; storing
+    // user-typed garbage into `:authid` is a regression introduced
+    // by the 82e8c3d2 "canonicalise valid IDs on IP-type bans" nit
+    // that preserved the canonical-on-valid case but failed to
+    // suppress the raw-on-invalid case). The form-side input remains
+    // visible on the IP-type bounce path (re-emit through the
+    // `placeholder` on the template, NOT a stale value), but the DB
+    // write is divorced from it.
+    if ($postBanType === BanType::Steam) {
+        if ($rawSteam === '') {
+            $error++;
+            $validationErrors['steam'] = 'You must type a Steam ID or Community ID';
+            $_POST['steam'] = '';
+        } elseif (!\SteamID\SteamID::isValidID($rawSteam)) {
+            $error++;
+            $validationErrors['steam'] = 'Please enter a valid Steam ID or Community ID';
+            // Re-emit the operator's raw input verbatim on the bounce
+            // so they see exactly what they typed and can correct the
+            // typo, instead of having the form silently clear.
+            $_POST['steam'] = $rawSteam;
+        } else {
+            // Convert ONLY after the shape gate passes. With the
+            // library tightening from follow-up #1 this call cannot
+            // throw — every input passing `isValidID()` resolves
+            // through the shared `ID_PATTERNS` table.
+            $_POST['steam'] = \SteamID\SteamID::toSteam2($rawSteam);
+        }
+    } else {
+        // IP-type ban: clear the steam slot for the DB write below
+        // (`:authid = $_POST['steam']` rides this). Whatever the
+        // operator happened to type in the Steam ID field stays
+        // visible in `$rawSteam` for any client-side echo, but it
+        // does NOT land in the DB. See the block comment above for
+        // the schema rationale.
+        $_POST['steam'] = '';
+    }
+
+    if ($error === 0 && empty($_POST['ip']) && $postBanType === BanType::Ip) {
         // Didn't type an IP
         $error++;
         $validationErrors['ip'] = 'You must type an IP';
-    } elseif ($postBanType === BanType::Ip && !filter_var($_POST['ip'], FILTER_VALIDATE_IP)) {
+    } elseif ($error === 0 && $postBanType === BanType::Ip && !filter_var($_POST['ip'], FILTER_VALIDATE_IP)) {
         $error++;
         $validationErrors['ip'] = 'You must type a valid IP';
     }

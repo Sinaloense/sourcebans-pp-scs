@@ -131,6 +131,102 @@ final class CommsTest extends ApiTestCase
         $this->assertSnapshot('comms/add_validation_steam', $env);
     }
 
+    /**
+     * #1420 — regression: a SteamID input the `SteamID` library
+     * can't pattern-match (anything not matching STEAM_X:Y:Z /
+     * [U:1:N] / 17-digit SteamID64) used to escape from the
+     * handler as a generic `\Exception("Invalid SteamID input!")`
+     * thrown deep inside `SteamID::resolveInputID()`. The dispatcher
+     * caught it in the catch-all `Throwable` arm and surfaced a
+     * 500 with body "An unexpected error occurred" — the panel's
+     * chrome read that as a server error, not a per-field
+     * validation failure, and the toast helper bound to the legacy
+     * `dialog-placement` element silently no-op'd against the v2.0
+     * chrome (the reporter's "no notification" symptom).
+     *
+     * Post-fix `api_comms_add` validates the SteamID shape against
+     * a strict anchored regex BEFORE handing it to
+     * `SteamID::toSteam2()`. `SteamID::isValidID()` on its own is
+     * NOT a sufficient gate — its regexes are unanchored with loose
+     * character classes (`STEAM_[0|1]:[0:1]:\d*` — note `|` inside
+     * `[...]` is a literal pipe, not alternation), so a substring
+     * match against an embedded valid-looking SteamID passes the
+     * library's gate AND `toSteam2()` then either binds corrupt
+     * bytes into the DB (`'asdfSTEAM_0:0:123'` round-trips
+     * unchanged) or emits a negative-Z-component canonical form
+     * (`'asdf 76561197960265728 garbage'` → `'STEAM_0:0:-38280598980132864'`).
+     * The strict regex (mirroring the form template's client-side
+     * `pattern` attribute byte-for-byte, HTML's `pattern` is
+     * implicitly anchored `^…$`) closes the bypass for
+     * curl-driven / third-party-theme callers. Mirrors the
+     * bans-add and admins-add fixes in the same PR.
+     *
+     * Cases:
+     *   - `'asdf'` — the reporter's example; doesn't match any
+     *     known SteamID shape.
+     *   - `'12345'` — a numeric string that's NOT 17 digits; would
+     *     fall through `resolveInputID`'s shape table.
+     *   - `'   '` — whitespace-only; trims down to '' and surfaces
+     *     the "must type" branch, but still as a structured error.
+     *   - `'STEAM_0:0:'` — the library's loose `\d*` regex accepts
+     *     zero digits; the strict `\d+` regex rejects.
+     *   - `'asdfSTEAM_0:0:123'` — substring-bypass case; the
+     *     library's unanchored regex would silently accept and
+     *     toSteam2 returns the input verbatim.
+     *   - `'asdf 76561197960265728 garbage'` — Steam64 surrounded
+     *     by junk; toSteam2 would emit a negative-Z corrupt form.
+     *   - `'U:1:1'` — bracketless Steam3; the library accepts but
+     *     the form's `pattern` requires brackets, so the strict
+     *     gate rejects for symmetry.
+     *   - `"STEAM_0:0:1\nGARBAGE"` / `"GARBAGE\nSTEAM_0:0:1"` —
+     *     mid-string newline bypass (#1423 follow-up #4). `trim()`
+     *     upstream of the gate handles trailing whitespace, so
+     *     the common `"STEAM_0:0:1\n"` typo path strips through to
+     *     a clean `"STEAM_0:0:1"` and rightly succeeds. But a
+     *     hostile caller (or a malformed file paste) embeds the
+     *     newline mid-string, where `trim()` doesn't touch it.
+     *     The strict gate's `^…$` anchors + non-`m` mode require
+     *     the whole string match the pattern; embedded `\n` fails.
+     *     `HANDLER_STRICT_REGEX`'s regex-level newline rejection is
+     *     pinned directly in `SteamIDValidationTest::testHandlerStrictRegexRejectsNewlineBypass`.
+     *   - `"STEAM_0:0:1\xC2\xA0"` — trailing NBSP (U+00A0). `trim`
+     *     only handles the ASCII whitespace set; unicode whitespace
+     *     like NBSP / zero-width-space / ideographic-space pass
+     *     through trim and must be caught at the regex layer.
+     */
+    public function testAddRejectsInvalidSteamIdShape(): void
+    {
+        $this->loginAsAdmin();
+        foreach (
+            [
+                'asdf',
+                '12345',
+                '   ',
+                'STEAM_0:0:',
+                'asdfSTEAM_0:0:123',
+                'asdf 76561197960265728 garbage',
+                'U:1:1',
+                "STEAM_0:0:1\nGARBAGE",
+                "GARBAGE\nSTEAM_0:0:1",
+                "STEAM_0:0:1\xC2\xA0",
+            ] as $badSteam
+        ) {
+            $env = $this->api('comms.add', [
+                'nickname' => 'BadShape',
+                'type'     => 1,
+                'steam'    => $badSteam,
+                'length'   => 5,
+                'reason'   => 'unit test',
+            ]);
+            $this->assertEnvelopeError($env, 'validation');
+            $this->assertSame(
+                'steam',
+                $env['error']['field'],
+                sprintf('expected error.field=steam for steam=%s', var_export($badSteam, true)),
+            );
+        }
+    }
+
     public function testAddValidatesType(): void
     {
         $this->loginAsAdmin();

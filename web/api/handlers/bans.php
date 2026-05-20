@@ -42,7 +42,7 @@ function api_bans_add(array $params): array
     $rawType  = (int)($params['type'] ?? 0);
     $banType  = BanType::tryFrom($rawType) ?? BanType::Steam;
     $type     = $banType->value;
-    $steam    = SteamID::toSteam2(trim((string)($params['steam'] ?? '')));
+    $rawSteam = trim((string)($params['steam'] ?? ''));
     $ip       = preg_replace('#[^\d\.]#', '', (string)($params['ip'] ?? ''));
     $length   = (int)($params['length'] ?? 0);
     $dfile    = (string)($params['dfile'] ?? '');
@@ -50,12 +50,48 @@ function api_bans_add(array $params): array
     $reason   = (string)($params['reason'] ?? '');
     $fromsub  = (int)($params['fromsub'] ?? 0);
 
-    if (empty($steam) && $banType === BanType::Steam) {
-        throw new ApiError('validation', 'You must type a Steam ID or Community ID', 'steam');
+    // #1420 — validate the SteamID shape BEFORE handing it to
+    // `SteamID::toSteam2()`. `resolveInputID()` throws a bare
+    // `\Exception` (not an `ApiError`) on any unrecognised shape;
+    // that escaped to the dispatcher's catch-all and produced a 500
+    // with body "An unexpected error occurred" instead of the
+    // structured `validation`-coded error the chrome's toast can
+    // render.
+    //
+    // The bundled `SteamID::isValidID()` is NOT a sufficient gate on
+    // its own — its regexes are unanchored with loose character
+    // classes, so an embedded-SteamID-with-garbage like
+    // `'asdf 76561197960265728 garbage'` matches the substring AND
+    // `toSteam2()` emits a corrupt canonical form (negative Z
+    // component from the parser eating surrounding bytes) which then
+    // gets bound into `:prefix_bans.authid`. The strict regex below
+    // mirrors the form template's client-side `pattern` attribute
+    // byte-for-byte (HTML's `pattern` is implicitly anchored `^…$`),
+    // so a curl-driven caller can't smuggle garbage past the gate
+    // that the browser's pattern-mismatch popover already rejects
+    // for form users. Comms-add and admin-add carry the same regex;
+    // all three handlers stay in lockstep so a future menu / deep-
+    // link / API client only has to learn one accepted shape.
+    if ($banType === BanType::Steam) {
+        if ($rawSteam === '') {
+            throw new ApiError('validation', 'You must type a Steam ID or Community ID', 'steam');
+        }
+        if (!preg_match(SteamID::HANDLER_STRICT_REGEX, $rawSteam)) {
+            throw new ApiError('validation', 'Please enter a valid Steam ID or Community ID', 'steam');
+        }
     }
-    if ($banType === BanType::Steam && !SteamID::isValidID($steam)) {
-        throw new ApiError('validation', 'Please enter a valid Steam ID or Community ID', 'steam');
-    }
+    // For IP-typed bans the `:authid` column is the *steam id*, of which
+    // there is none — write empty string regardless of whatever the
+    // caller passed in `$rawSteam`. Pre-#1423 follow-up #4 the handler
+    // converted any non-empty `$rawSteam` here without re-running the
+    // shape gate (which was Steam-branch-only), so a hostile / typo'd
+    // caller passing `type=1&steam=garbage&ip=1.2.3.4` triggered
+    // `toSteam2('garbage')` → `Exception('Invalid SteamID input!')` →
+    // `Api::handle` `Throwable` fallback → 500 envelope (the bug class
+    // #1420 was supposed to close, surfacing on the IP-type branch the
+    // original review didn't cover). The page-handler sibling
+    // (`admin.edit.ban.php`) carries the matching write-side fix.
+    $steam = $banType === BanType::Ip ? '' : ($rawSteam === '' ? '' : SteamID::toSteam2($rawSteam));
     if (empty($ip) && $banType === BanType::Ip) {
         throw new ApiError('validation', 'You must type an IP', 'ip');
     }
