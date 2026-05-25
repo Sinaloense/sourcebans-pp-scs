@@ -890,6 +890,128 @@ of the diff ship together or not at all.
   also accepts the token via the `X-CSRF-Token` header — `sb.api.call`
   sets it automatically).
 
+### Public auth surfaces: response-shape uniformity (no user enumeration)
+
+Any **publicly-reachable, unauthenticated** endpoint whose code path
+inspects `:prefix_admins` (or any other per-account row) MUST return a
+**response envelope whose shape, kind, title, and body are byte-for-byte
+identical** across the matched / unmatched / mail-failed / other-server-
+error branches. A user-visible differential — different error code,
+different toast `kind`, different title, different body wording — is a
+**user enumeration oracle**: a hostile visitor can hit the endpoint
+once per address, read the envelope back, and conclude whether the
+address has an admin account on this panel. That's #1456's bug class
+on the password-recovery flow (`api_auth_lost_password`); the rule
+generalises to every future surface that takes an identifier and looks
+it up against admin state.
+
+The contract:
+
+- **All success / not-found / mail-failed / transient-error branches
+  return the SAME envelope.** Use a single helper function (see
+  `_api_auth_lost_password_generic_response()` for the reference
+  shape) and call it from every reachable branch. Don't `throw new
+  ApiError('not_registered', …)` on the miss branch — that branches
+  the wire shape AND the painted toast on a per-account signal.
+- **Operator-side toggles ARE OK to surface.** Returning
+  `ApiError('disabled', …)` when `config.enablenormallogin` is off
+  is fine: the value is the same for every caller regardless of
+  what email they tried, so it doesn't reveal any per-account
+  signal. The matching page-handler guard must 302 away on the
+  same toggle so the form is never rendered, but curl-driven
+  callers reaching the JSON dispatcher get the structured `disabled`
+  envelope.
+- **Body copy stays neutral.** Don't write "a reset email has been
+  sent to your address" (leaks: existence) or "no account was found
+  for that address" (leaks: non-existence). Write the conditional
+  ("if that email is registered, …, please check your inbox and
+  spam folder") — the wording is identical across every branch.
+- **Audit-log discipline mirrors the response.** Log mail failures
+  / transient SMTP errors so an operator can diagnose them
+  (`Mail::send` already logs the underlying transport exception
+  via `LogType::Error`; the handler adds a paired entry that
+  pins the *action* that triggered the failure). Do NOT log the
+  miss branch — anonymous visitors get to write to `:prefix_log`
+  once per request would let a hostile actor flood the audit
+  table at request-rate; AND the log entries would themselves be
+  a side-channel into "this is an unknown email" visible to
+  anyone who can read the audit log.
+
+  Residual log-DoS surface (documented, NOT closed by #1456):
+  the matched-branch SMTP-failure path emits a log entry per
+  call. An attacker who knows a single registered email AND
+  catches the panel with broken SMTP can hammer the endpoint
+  to flood `:prefix_log` (and, as a side effect, roll the
+  legitimate user's outstanding `validate` token on every
+  request, invalidating any reset link in flight). Closing that
+  channel cleanly requires a per-(IP × email) rate limiter the
+  panel doesn't currently have. The pragmatic mitigation today
+  is the implicit one — SMTP failures should be rare on a
+  healthy deployment, and the audit-log table is acceptably
+  sized for the access pattern — but the surface is a tracking
+  follow-up; do not depend on it remaining quiet under attack.
+- **DB writes only happen on the matched branch.** Never UPDATE
+  or INSERT a row keyed on an attacker-supplied identifier when the
+  identifier didn't match — that's both a write amplification
+  vector (DoS the DB by hammering with random emails) AND would
+  leak via row-count / mtime / WAL traffic. The matched branch
+  performs the legitimate write (e.g. rolling the `validate` token);
+  the unmatched branch returns the generic envelope immediately.
+- **SMTP only fires on the matched branch.** Never email an
+  attacker-supplied address when no row matched — that turns the
+  endpoint into an open mail relay / spam gun (any visitor can use
+  the panel to send mail to any address). The generic envelope
+  lies to the user in the missed-branch case ("If that email is
+  registered, a link has been sent" → it wasn't, but they don't
+  get told), which is the intended behavior.
+
+**Caveat: response-time differential remains.** The matched branch
+performs a DB write + an SMTP round-trip; the unmatched branch
+returns immediately. A determined attacker can still enumerate by
+timing the round-trip — registered addresses take longer because
+they reach the SMTP layer. Closing the timing channel requires
+either a background-worker queued send (out of scope — the panel
+has no worker) or a deliberate "pad the miss with a fake SMTP
+delay" approach (brittle in practice: the matched-branch latency
+varies with the SMTP server's mood). The response-shape uniformity
+above is the load-bearing fix because it closes the trivially-
+exploitable channel that motivated the issue (a hostile visitor
+reading the painted toast title); the response-time leak is a
+documented residual risk that requires its own follow-up.
+
+Reference shape: `web/api/handlers/auth.php`
+(`api_auth_lost_password` + `_api_auth_lost_password_generic_response`).
+Regression guards: `web/tests/api/AuthTest.php`
+(`testLostPasswordResponseIsIdenticalForKnownAndUnknownEmail` is
+the canonical "byte-for-byte identical" assertion) +
+`web/tests/api/__snapshots__/auth/lost_password_generic.json` (the
+locked wire-format) + `web/tests/e2e/specs/flows/lostpassword-toast.spec.ts`
+(the chrome-side parity test — same painted toast for known +
+unknown emails).
+
+**Sibling surfaces still in scope for follow-up:** `api_auth_login`
+in `web/api/handlers/auth.php` ALSO branches its `Api::redirect()`
+target on per-account signals — empty-password vs. unknown-user vs.
+locked-account each redirect to a different `?m=…` flag on the
+login page, which the page handler then surfaces as different toast
+titles. The concrete oracle: POST `{username: 'admin', password: ''}`
+returns `?p=login&m=empty_pwd` (known user, empty-password
+short-circuit at `api_auth_login` line 50-52 runs BEFORE
+`NormalAuthHandler` so `attempts` is not incremented); POST
+`{username: 'doesnotexist', password: ''}` returns
+`?p=login&m=failed` (unknown-user short-circuit at line 41-43,
+never touches `:prefix_admins` at all). That's a one-request-per-
+username enumeration channel, no DB writes, no lockout
+interaction — the `attempts` counter only gates the password-
+attempt branch downstream, so the lockout-after-5 gate provides
+**no** protection against this surface (the gate fires on
+`NormalAuthHandler` failures, which the empty-password branch
+returns before reaching). Sized similarly to the pre-#1456
+`api_auth_lost_password` leak; tracked as a follow-up to #1456.
+Do not silently introduce a NEW public auth surface with the same
+branching shape — every new endpoint added here goes through the
+response-uniformity contract above.
+
 ### Permissions
 
 - Web flags live in `web/configs/permissions/web.json`; `init.php`
@@ -3018,6 +3140,29 @@ contacting every contributor individually.
 - `xajax` / `sb-callback.php` → use the JSON API.
 - ADOdb → use `Sbpp\Db\Database` (PDO; legacy `Database` alias still
   resolves via `class_alias`).
+- Branching the response envelope on a per-account signal in a public
+  auth surface (`throw new ApiError('not_registered', …)` on the
+  password-reset miss branch, `throw new ApiError('mail_failed', …)`
+  on the SMTP-failure branch, "an email has been sent to <user>" on
+  the success branch vs. "no account found" on the miss branch in
+  the painted toast) → use `_api_auth_lost_password_generic_response`-
+  shape helpers that return the SAME envelope across every reachable
+  branch. The pre-#1456 shape on `api_auth_lost_password` let an
+  unauthenticated visitor enumerate every registered admin email by
+  posting one address per request and reading the painted toast
+  title back ("Check E-Mail" → registered; "Error" + "not
+  registered" → unregistered). The post-fix contract is documented
+  under "Public auth surfaces: response-shape uniformity" in
+  Conventions; new public auth surfaces fall under the same rule
+  from day one. The orphaned snapshots
+  (`web/tests/api/__snapshots__/auth/lost_password_not_registered.json`
+  and `lost_password_mail_failed.json`) were deleted at #1456 — do
+  not re-add them; if a future change needs a non-generic snapshot
+  on this surface, the contract has regressed. Closes the
+  user-visible channel; the response-time differential between the
+  matched (SMTP round-trip) and missed (immediate return) branches
+  is documented as a residual risk requiring a separate (background-
+  worker / pad-the-miss) follow-up.
 - MooTools / React / a runtime bundler → vanilla JS in `web/scripts/`.
 - `web/scripts/sourcebans.js` (the v1.x ~1.7k-line bulk file shipping
   `ShowBox`, `DoLogin`, `LoadServerHost`, `selectLengthTypeReason`, …)
@@ -4341,6 +4486,7 @@ contacting every contributor individually.
 | Edit a docs page or add a new one (the Astro + Starlight site published at sbpp.github.io) | `docs/src/content/docs/<group>/<slug>.md` (or `.mdx` when the page uses tabs / cards / asides — e.g. `getting-started/quickstart.mdx`, `setup/mariadb.mdx`). New pages also need a sidebar entry in `docs/astro.config.mjs` (the `sidebar:` array). Site config + theme tokens live in `docs/astro.config.mjs` + `docs/src/styles/sbpp.css`. The Starlight chrome ships from `@astrojs/starlight`; layout overrides land under `docs/src/components/` (see `ThemeProvider.astro` for the canonical override shape). Local dev: `cd docs && npm install && npm run dev`. CI gates: `.github/workflows/docs-build.yml` (per-PR build), `docs-deploy-trigger.yml` (main → repository_dispatch into sbpp.github.io), `docs-screenshots.yml` (gated on the `affects-ui` label, runs `docs/scripts/capture.mjs`). Source of truth is here; sbpp.github.io is the deploy shell only (#1333). |
 | Refresh installer / panel screenshots used in docs pages | `docs/scripts/capture.mjs` (Playwright; `npm run capture` in `docs/`). Output lands under `docs/src/assets/auto/{install,panel}/<stable-slug>.png` so docs pages keep referencing the same path across runs. CI does this automatically on PRs labelled `affects-ui`; locally run after `./sbpp.sh up`. STEAM_API_KEY is the all-zero dummy `00000000000000000000000000000000`. |
 | Add a JSON action                      | `web/api/handlers/_register.php` + `web/api/handlers/<topic>.php` |
+| Add or audit a publicly-reachable, unauthenticated auth surface (anything in `web/api/handlers/auth.php` or sibling registered as `requireAuth: false`) without leaking per-account state | The reference shape is `api_auth_lost_password` + `_api_auth_lost_password_generic_response` in `web/api/handlers/auth.php` (#1456). All reachable branches MUST return the same envelope; operator-side toggles (e.g. `config.enablenormallogin`) MAY surface as a per-toggle error code because the value is the same for every caller. The pre-#1456 shape branched on `not_registered` / `mail_failed` and let an unauthenticated visitor enumerate registered admin emails one request at a time by reading the painted toast back. See "Public auth surfaces: response-shape uniformity" in Conventions for the full contract (audit-log discipline, DB-write gating, SMTP gating, the documented response-time residual risk) + the matching Anti-patterns entry. Regression guards: `web/tests/api/AuthTest.php::testLostPasswordResponseIsIdenticalForKnownAndUnknownEmail` (byte-for-byte wire assertion) + `web/tests/api/__snapshots__/auth/lost_password_generic.json` (locked envelope) + `web/tests/e2e/specs/flows/lostpassword-toast.spec.ts` (chrome-side parity: same painted toast for known + unknown emails). Sibling surfaces still subject to follow-up (documented under the convention): `api_auth_login` branches its `Api::redirect()` target on per-account state via `?m=…` flags. |
 | Resolve / override the JSON-API endpoint URL the client-side `sb.api.call(...)` POSTs to | `web/scripts/api.js` (`resolveEndpoint()` — runs once at script-load, computes `new URL('../api.php', document.currentScript.src).href`). The script lives at `/scripts/api.js` regardless of which page loads it, so resolving `../api.php` against the script's own URL lands on the panel-root `/api.php` for top-level page renders, iframe-routed surfaces (`pages/admin.kickit.php` / `pages/admin.blockit.php`), AND subdir installs (`https://host/sourcebans/` → script at `…/scripts/api.js` → endpoint at `…/api.php`). The endpoint stays writable on `sb.api` so callers can swap it; do not edit the resolver to a bare `'./api.php'` literal — that's the pre-#1433 regression shape that 404s every iframe round-trip (`./api.php` resolves against the iframe's document URL `/pages/admin.kickit.php` → `/pages/api.php`, no such route). **Load via static `<script src="…">` only** — `document.currentScript` is `null` when the script is appended programmatically (`document.createElement('script')`, `<script>document.write(...)</script>`, async loaders, ES-module `import()`), and a null `currentScript` collapses `SCRIPT_SRC` to the empty string and silently falls back to the bare-relative `./api.php` — i.e. the exact pre-#1433 bug. The three static load sites in the default theme are `core/header.tpl` (top-level panel chrome → `./scripts/api.js`), `page_kickit.tpl`, and `page_blockit.tpl` (iframe surfaces → `../scripts/api.js`); a theme fork that wants to lazy-load needs its own paired endpoint resolver. Pinned by `web/tests/integration/ApiJsEndpointResolutionTest.php` (static) + `web/tests/e2e/specs/flows/kickit-iframe.spec.ts` (runtime). |
 | Validate a server-address input (IPv4 / IPv6 / hostname) on either Add-Server (`api_servers_add`) or Edit-Server (`admin.edit.server.php`) | Shared validator pattern: `filter_var($x, FILTER_VALIDATE_IP) \|\| filter_var($x, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)`. Both surfaces MUST share the same predicate so a value either round-trips through Add AND Edit or fails on both (#1433); pre-fix the JSON dispatcher ran IP-only while the page handler ran a too-loose hand-rolled `^[a-zA-Z0-9.\-]+$` regex. The matching schema-width gate (`strlen($x) > 64`, surfacing as `validation` envelope or `$validationErrors['address']`) is paired with the IP/hostname check because `:prefix_servers.ip` is `VARCHAR(64) NOT NULL` (see `web/install/includes/sql/struc.sql`) — well below RFC 1035's 253-char hostname max, and MariaDB strict mode would otherwise raise `SQLSTATE[22001] 1406 Data too long for column 'ip'` mid-INSERT (generic 500 + no audit-log entry). Bumping the column to `VARCHAR(255)` is a paired schema-migration follow-up. Pinned by `web/tests/api/ServersTest.php::testAddAcceptsHostname` / `testAddAcceptsFqdn` / `testAddAcceptsBareIPv6` / `testAddRejectsAddressExceedingSchemaWidth` / `testAddRefusesDuplicateHostnamePort` / `testAddRejectsWhitespaceInAddress`. |
 | Add or rename a permission             | `web/configs/permissions/web.json`, then regen contract  |
