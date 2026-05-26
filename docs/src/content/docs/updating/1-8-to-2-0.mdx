@@ -250,6 +250,52 @@ hard cap on the response body, stale-while-error caching, and
 is silent on failure. A flapping `sbpp.github.io` can never
 hard-fail a panel page.
 
+## Plugin authors
+
+SourceBans++ 2.0.0 aligns the public header with the 2.0 release
+(`SOURCEBANSPP_VERSION_MAJOR` = 2; `SOURCEBANSPP_VERSION_MINOR` is the
+native API additive revision, **not** the panel's semver minor; `SB_VERSION`
+is stamped at compile time from release tag → `configs/version.json` →
+`git describe` → `dev`). That is a **version epoch marker**, not a signal
+that every third-party plugin must be recompiled.
+
+If you compile plugins from a git checkout, run
+`game/addons/sourcemod/scripting/scripts/resolve-plugin-version.sh`
+before `spcomp` so `sbpp_version.inc` matches your tree (the repo ships a
+`dev` fallback so a bare compile still works).
+
+**You do not need to rebuild** if your plugin only uses APIs that already
+existed on the 1.x line (for example `SBPP_BanPlayer`, `SBPP_OnBanPlayer`,
+`SBPP_OnReportPlayer`) and you are not detecting the checker via
+`LibraryExists` / `GetFeatureStatus`.
+
+**Recompile (and redeploy your `.smx`) when you:**
+
+- `#include <sourcebanschecker>` and probe the checker with
+  `LibraryExists` / `GetFeatureStatus` — use library name
+  `"sourcechecker++"`, not `"sourcebans++"`
+  ([#1034](https://github.com/sbpp/sourcebans-pp/pull/1034)).
+- Call `SBPP_CheckerGetClientsMutes` or `SBPP_CheckerGetClientsGags`
+  ([#1032](https://github.com/sbpp/sourcebans-pp/pull/1032)) — deploy
+  `sbpp_checker.smx` from this release too.
+- Want to implement `SBPP_OnClientPostAdminCheck`
+  ([#1431](https://github.com/sbpp/sourcebans-pp/pull/1431)) — additive
+  forward; existing binaries ignore it until you add a hook.
+
+Optional guard when you compile against 2.0 `sourcebanspp.inc`:
+
+```sourcepawn
+#if SOURCEBANSPP_VERSION_MAJOR != 2
+#error Rebuild against SourceBans++ 2.0 sourcebanspp.inc
+#endif
+```
+
+Deploy the official 2.0 plugin bundle (`sbpp_main.smx`, `sbpp_comms.smx`,
+`sbpp_checker.smx`, …) with the panel upgrade. SourceMod **1.12.x** matches
+project CI.
+
+Tracking: [#1114](https://github.com/sbpp/sourcebans-pp/issues/1114).
+
 ## Licence change
 
 The 1.8.x line shipped the web panel under
