@@ -349,6 +349,67 @@ function api_bans_edit_comment(array $params): array
     ];
 }
 
+function api_bans_remove_demo(array $params): array
+{
+    global $userbank, $username;
+
+    $bid = (int) ($params['bid'] ?? 0);
+    if ($bid <= 0) {
+        throw new ApiError('validation', 'Missing or invalid ban id.', 'bid');
+    }
+
+    $row = $GLOBALS['PDO']
+        ->query(
+            'SELECT ba.aid, ad.gid
+             FROM `:prefix_bans` AS ba
+             LEFT JOIN `:prefix_admins` AS ad ON ba.aid = ad.aid
+             WHERE ba.bid = :bid'
+        )
+        ->single([':bid' => $bid]);
+
+    if (!$row) {
+        throw new ApiError('not_found', 'Ban not found.');
+    }
+
+    $canEdit = $userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::EditAllBans))
+        || ($userbank->HasAccess(WebPermission::EditOwnBans) && (int) $row['aid'] === $userbank->GetAid())
+        || ($userbank->HasAccess(WebPermission::EditGroupBans) && (int) $row['gid'] === (int) $userbank->GetProperty('gid'));
+
+    if (!$canEdit) {
+        throw new ApiError('forbidden', 'You do not have permission to edit this ban.');
+    }
+
+    $demo = $GLOBALS['PDO']
+        ->query(
+            "SELECT filename FROM `:prefix_demos`
+             WHERE demid = :bid AND UPPER(demtype) = 'B'"
+        )
+        ->single([':bid' => $bid]);
+
+    if (!$demo) {
+        throw new ApiError('not_found', 'No demo is attached to this ban.');
+    }
+
+    $onDisk = basename((string) $demo['filename']);
+    $path   = SB_DEMOS . '/' . $onDisk;
+    $listing = is_dir(SB_DEMOS) ? scandir(SB_DEMOS) : false;
+    if ($onDisk !== '' && $listing !== false && in_array($onDisk, $listing, true) && is_file($path)) {
+        if (!unlink($path)) {
+            throw new ApiError('server_error', 'Unable to delete demo file from disk.');
+        }
+    }
+
+    $GLOBALS['PDO']
+        ->query("DELETE FROM `:prefix_demos` WHERE demid = :bid AND UPPER(demtype) = 'B'")
+        ->execute([':bid' => $bid]);
+
+    Log::add(LogType::Message, 'Demo Removed', "$username removed the demo from ban #$bid");
+
+    return [
+        'removed' => true,
+    ];
+}
+
 function api_bans_remove_comment(array $params): array
 {
     global $username;
