@@ -141,6 +141,12 @@
             <i data-lucide="heart" aria-hidden="true" style="width:12px;height:12px"></i>
             Support SourceBans++
         </a>
+        <div>
+            </br>
+            <a href="https://www.serverscstrike.com/" target="_blank">
+	    		<img alt="logoSCS" draggable="false" width="72" height="44" style="color:transparent;cursor:pointer" src="https://www.serverscstrike.com/_next/image?url=%2Fscs-logo-min.png&w=96&q=75">
+			</a>
+        </div>
     </footer>
   </div>{* /.main *}
 </div>{* /.app *}
