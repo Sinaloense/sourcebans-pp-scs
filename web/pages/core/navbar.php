@@ -81,12 +81,30 @@ $admin = [
         'title' => 'Mods',
         'endpoint' => 'mods',
         'permission' => ADMIN_OWNER|ADMIN_LIST_MODS|ADMIN_ADD_MODS|ADMIN_EDIT_MODS|ADMIN_DELETE_MODS
+    ],
+    [
+        // Full data export — owner-only (every PII category in scope).
+        // Same gate as page-builder.php's `$adminRoutes['export']`
+        // entry, the page handler's `CheckAdminAccess(ADMIN_OWNER)`,
+        // and the entry point at `web/export.php`.
+        'title' => 'Export',
+        'endpoint' => 'export',
+        'permission' => ADMIN_OWNER
     ]
 ];
 
-$active = filter_input(INPUT_GET, 'p', FILTER_SANITIZE_SPECIAL_CHARS);
+$active    = $_GET['p'] ?? null;
+$activeCat = $_GET['c'] ?? null;
 foreach ($navbar as $key => $tab) {
-    $navbar[$key]['state'] = ($active === $tab['endpoint']) ? 'active' : 'nonactive';
+    $isActive = ($active === $tab['endpoint']);
+    // The 'admin' parent is the leaf only when no sub-route is selected.
+    // On ?p=admin&c=<sub> the sub-route's own entry owns the active
+    // state; otherwise both rows would carry aria-current="page", which
+    // misreports the current location to assistive tech (#1233).
+    if ($tab['endpoint'] === 'admin' && $activeCat !== null && $activeCat !== '') {
+        $isActive = false;
+    }
+    $navbar[$key]['state'] = $isActive ? 'active' : 'nonactive';
 
     if (!$tab['permission']) {
         unset($navbar[$key]);
@@ -94,7 +112,7 @@ foreach ($navbar as $key => $tab) {
 }
 
 if ($userbank->is_admin()) {
-    $cat = filter_input(INPUT_GET, 'c', FILTER_SANITIZE_SPECIAL_CHARS);
+    $cat = $_GET['c'] ?? null;
     foreach ($admin as $key => $tab) {
         $admin[$key]['state'] = ($cat === $tab['endpoint']) ? 'active' : '';
 

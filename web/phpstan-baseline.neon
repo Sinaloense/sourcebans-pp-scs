@@ -1,0 +1,517 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Offset ''ip'' on array\{id\: string, name\: string, steamid\: string, ip\: string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: api/handlers/bans.php
+
+		-
+			message: '#^Parameter \#2 \$associative of function get_headers expects bool, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: api/handlers/bans.php
+
+		-
+			message: '#^Offset ''ip'' on array\{id\: string, name\: string, steamid\: string, ip\: string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: api/handlers/kickit.php
+
+		-
+			message: '#^Variable \$userbank might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: exportbans.php
+
+		-
+			message: '#^Variable \$userbank might not be defined\.$#'
+			identifier: variable.undefined
+			count: 5
+			path: export.php
+
+		-
+			message: '#^Call to an undefined method Lcobucci\\JWT\\Token\:\:claims\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: includes/Auth/Auth.php
+
+		-
+			message: '#^Static method Sbpp\\Auth\\Auth\:\:getTokenSecret\(\) is unused\.$#'
+			identifier: method.unused
+			count: 1
+			path: includes/Auth/Auth.php
+
+		-
+			message: '#^Static method Sbpp\\Auth\\Auth\:\:insertNewToken\(\) is unused\.$#'
+			identifier: method.unused
+			count: 1
+			path: includes/Auth/Auth.php
+
+		-
+			message: '#^Variable \$password in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: includes/Auth/Handler/NormalAuthHandler.php
+
+		-
+			message: '#^Access to property \$data on an unknown class LightOpenID\.$#'
+			identifier: class.notFound
+			count: 1
+			path: includes/Auth/Handler/SteamAuthHandler.php
+
+		-
+			message: '#^Access to property \$identity on an unknown class LightOpenID\.$#'
+			identifier: class.notFound
+			count: 3
+			path: includes/Auth/Handler/SteamAuthHandler.php
+
+		-
+			message: '#^Access to property \$mode on an unknown class LightOpenID\.$#'
+			identifier: class.notFound
+			count: 1
+			path: includes/Auth/Handler/SteamAuthHandler.php
+
+		-
+			message: '#^Call to method authUrl\(\) on an unknown class LightOpenID\.$#'
+			identifier: class.notFound
+			count: 1
+			path: includes/Auth/Handler/SteamAuthHandler.php
+
+		-
+			message: '#^Call to method validate\(\) on an unknown class LightOpenID\.$#'
+			identifier: class.notFound
+			count: 1
+			path: includes/Auth/Handler/SteamAuthHandler.php
+
+		-
+			message: '#^Parameter \$openid of method Sbpp\\Auth\\Handler\\SteamAuthHandler\:\:__construct\(\) has invalid type LightOpenID\.$#'
+			identifier: class.notFound
+			count: 1
+			path: includes/Auth/Handler/SteamAuthHandler.php
+
+		-
+			message: '#^Property Sbpp\\Auth\\Handler\\SteamAuthHandler\:\:\$openid has unknown class LightOpenID as its type\.$#'
+			identifier: class.notFound
+			count: 1
+			path: includes/Auth/Handler/SteamAuthHandler.php
+
+		-
+			message: '#^Call to an undefined method Lcobucci\\JWT\\Token\:\:claims\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: includes/Auth/JWT.php
+
+		-
+			message: '#^Method Sbpp\\Auth\\JWT\:\:create\(\) should return Lcobucci\\JWT\\Token\\Plain but returns Lcobucci\\JWT\\UnencryptedToken\.$#'
+			identifier: return.type
+			count: 1
+			path: includes/Auth/JWT.php
+
+		-
+			message: '#^Parameter \#1 \$contents of static method Lcobucci\\JWT\\Signer\\Key\\InMemory\:\:base64Encoded\(\) expects non\-empty\-string, '''' given\.$#'
+			identifier: argument.type
+			count: 1
+			path: includes/Auth/JWT.php
+
+		-
+			message: '#^Call to an undefined method Lcobucci\\JWT\\Token\:\:claims\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: includes/Auth/UserManager.php
+
+		-
+			message: '#^Offset int\<0, max\> on array\{function\: string, line\?\: int, file\?\: string, class\?\: class\-string, type\?\: ''\-\>''\|''\:\:'', args\?\: list\<mixed\>, object\?\: object\} in isset\(\) does not exist\.$#'
+			identifier: isset.offset
+			count: 1
+			path: includes/Log.php
+
+		-
+			message: '#^Constant SB_THEME not found\.$#'
+			identifier: constant.notFound
+			count: 2
+			path: includes/Mail/Mail.php
+
+		-
+			message: '#^Property Sbpp\\View\\AdminFeaturesView\:\:\$can_owner is never referenced in template "page_admin_settings_features\.tpl"\.$#'
+			identifier: sbpp.view.unusedProperty
+			count: 1
+			path: includes/View/AdminFeaturesView.php
+
+		-
+			message: '#^Property Sbpp\\View\\AdminSettingsView\:\:\$can_owner is never referenced in template "page_admin_settings_settings\.tpl"\.$#'
+			identifier: sbpp.view.unusedProperty
+			count: 1
+			path: includes/View/AdminSettingsView.php
+
+		-
+			message: '#^Property Sbpp\\View\\AdminThemesView\:\:\$can_owner is never referenced in template "page_admin_settings_themes\.tpl"\.$#'
+			identifier: sbpp.view.unusedProperty
+			count: 1
+			path: includes/View/AdminThemesView.php
+
+		-
+			message: '#^Property Sbpp\\View\\HomeDashboardView\:\:\$opened_server is never referenced in template "page_dashboard\.tpl"\.$#'
+			identifier: sbpp.view.unusedProperty
+			count: 1
+			path: includes/View/HomeDashboardView.php
+
+		-
+			message: '#^Instantiated class LightOpenID not found\.$#'
+			identifier: class.notFound
+			count: 1
+			path: includes/page-builder.php
+
+		-
+			message: '#^Constant SB_THEME not found\.$#'
+			identifier: constant.notFound
+			count: 7
+			path: pages/admin.settings.php
+
+		-
+			message: '#^Variable \$title might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: pages/core/header.php
+
+		-
+			message: '#^Variable \$title might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: pages/core/title.php
+
+		-
+			message: '#^Negated boolean expression is always false\.$#'
+			identifier: booleanNot.alwaysFalse
+			count: 1
+			path: pages/page.banlist.php
+
+		-
+			message: '#^Negated boolean expression is always true\.$#'
+			identifier: booleanNot.alwaysTrue
+			count: 1
+			path: pages/page.banlist.php
+
+		-
+			message: '#^Offset ''advSearch'' on non\-empty\-array\<mixed\> in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.offset
+			count: 1
+			path: pages/page.banlist.php
+
+		-
+			message: '#^Offset ''ub_reason'' on array\{ban_id\: mixed, country\: non\-falsy\-string, ban_date\: string, player\: string, type\: mixed, steamid\: mixed, communityid\: mixed, steamid3\: mixed, \.\.\.\} in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.offset
+			count: 1
+			path: pages/page.banlist.php
+
+		-
+			message: '#^Variable \$ctext in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: pages/page.banlist.php
+
+		-
+			message: '#^Variable \$res might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: pages/page.banlist.php
+
+		-
+			message: '#^Variable \$searchlink might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: pages/page.banlist.php
+
+		-
+			message: '#^Negated boolean expression is always false\.$#'
+			identifier: booleanNot.alwaysFalse
+			count: 2
+			path: pages/page.commslist.php
+
+		-
+			message: '#^Offset ''advSearch'' on non\-empty\-array\<mixed\> in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.offset
+			count: 1
+			path: pages/page.commslist.php
+
+		-
+			message: '#^Variable \$prev might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: pages/page.commslist.php
+
+		-
+			message: '#^Variable \$res might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: pages/page.commslist.php
+
+		-
+			message: '#^Variable \$errors in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 2
+			path: sb_debug_connection.php
+
+		-
+			message: '#^Variable \$serverip in empty\(\) always exists and is always falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: sb_debug_connection.php
+
+		-
+			message: '#^Variable \$serverport in empty\(\) always exists and is always falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: sb_debug_connection.php
+
+		-
+			message: '#^Variable \$serverrcon in empty\(\) always exists and is always falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: sb_debug_connection.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: updater/data/1.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 30
+			path: updater/data/112.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 8
+			path: updater/data/130.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 19
+			path: updater/data/150.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 6
+			path: updater/data/153.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/158.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: updater/data/160.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/165.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/171.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/175.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 8
+			path: updater/data/176.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/179.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/189.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: updater/data/191.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 8
+			path: updater/data/219.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: updater/data/241.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 15
+			path: updater/data/291.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 15
+			path: updater/data/295.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/342.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/350.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: updater/data/351.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 16
+			path: updater/data/352.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/353.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/354.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 8
+			path: updater/data/355.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/356.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: updater/data/475.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/476.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/555.php
+
+		-
+			message: '#^Parameter \#2 \$replace of function str_replace expects array\<string\>\|string, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: updater/data/600.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 10
+			path: updater/data/600.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/602.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/603.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 6
+			path: updater/data/604.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 6
+			path: updater/data/605.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 7
+			path: updater/data/700.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/701.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/702.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: updater/data/703.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: updater/data/704.php
+
+		-
+			message: '#^Variable \$this might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: updater/data/705.php

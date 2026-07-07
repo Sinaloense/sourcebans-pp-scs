@@ -1,0 +1,55 @@
+<?php
+// SourceBans++ (c) 2014-2026 SourceBans++ Dev Team
+// Licensed under the Elastic License 2.0.
+// See LICENSE.txt for the full license text and THIRD-PARTY-NOTICES.txt for attributions.
+
+// Never let a PHP warning/notice/deprecation print to stdout: it would
+// corrupt the JSON envelope that the client tries to parse. Errors still
+// reach the server log via error_log() in Api::dispatch().
+ini_set('display_errors', '0');
+
+// Last-resort safety net: if init.php dies, a handler triggers a fatal,
+// or anything else escapes Api::dispatch()'s try/catch, still return a
+// well-formed JSON envelope so the client never has to guess.
+set_exception_handler(function (\Throwable $e): void {
+    if (!headers_sent()) {
+        header('Content-Type: application/json; charset=utf-8');
+        http_response_code(500);
+    }
+    error_log('[api] uncaught: ' . $e);
+    $msg = (defined('DEBUG_MODE') && DEBUG_MODE)
+        ? $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine()
+        : 'An unexpected error occurred. See server logs for details.';
+    echo json_encode(['ok' => false, 'error' => ['code' => 'server_error', 'message' => $msg]]);
+});
+
+register_shutdown_function(function (): void {
+    $err = error_get_last();
+    if ($err === null) {
+        return;
+    }
+    $fatal = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR];
+    if (!in_array($err['type'], $fatal, true)) {
+        return;
+    }
+    if (!headers_sent()) {
+        header('Content-Type: application/json; charset=utf-8');
+        http_response_code(500);
+    }
+    error_log(sprintf('[api] fatal: %s in %s:%d', $err['message'], $err['file'], $err['line']));
+    $msg = (defined('DEBUG_MODE') && DEBUG_MODE)
+        ? sprintf('%s @ %s:%d', $err['message'], $err['file'], $err['line'])
+        : 'A fatal error occurred. See server logs for details.';
+    echo json_encode(['ok' => false, 'error' => ['code' => 'fatal', 'message' => $msg]]);
+});
+
+include_once __DIR__ . '/init.php';
+require_once INCLUDES_PATH . '/system-functions.php';
+// Api / ApiError are eagerly required by init.php (#1290 phase B) so the
+// `Api` / `ApiError` global aliases register before any procedural code
+// references them. The require_once below is a defensive no-op kept so
+// the file path stays self-documenting.
+require_once INCLUDES_PATH . '/Api/Api.php';
+
+Api::bootstrap();
+Api::dispatch();

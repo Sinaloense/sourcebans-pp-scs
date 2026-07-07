@@ -1,21 +1,7 @@
 <?php
-/*************************************************************************
-This file is part of SourceBans++
-
-SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
-
-The SourceBans++ Web panel is licensed under a
-Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
-
-You should have received a copy of the license along with this
-work.  If not, see <http://creativecommons.org/licenses/by-nc-sa/3.0/>.
-
-This program is based off work covered by the following copyright(s):
-SourceBans 1.4.11
-Copyright © 2007-2014 SourceBans Team - Part of GameConnect
-Licensed under CC-BY-NC-SA 3.0
-Page: <http://www.sourcebans.net/> - <http://www.gameconnect.net/>
-*************************************************************************/
+// SourceBans++ (c) 2014-2026 SourceBans++ Dev Team
+// Licensed under the Elastic License 2.0.
+// See LICENSE.txt for the full license text and THIRD-PARTY-NOTICES.txt for attributions.
 
 if (!defined("IN_SB")) {
     echo "You should not be here. Only follow links!";
@@ -49,14 +35,16 @@ if (!isset($_GET['type']) || ($_GET['type'] != 's' && $_GET['type'] != 'p')) {
 // Submission
 $email = "";
 if ($_GET['type'] == 's') {
-    $email = $GLOBALS['db']->GetOne('SELECT email FROM `' . DB_PREFIX . '_submissions` WHERE subid = ?', array(
-        $_GET['id']
-    ));
+    $GLOBALS['PDO']->query('SELECT email FROM `:prefix_submissions` WHERE subid = :id');
+    $GLOBALS['PDO']->bind(':id', $_GET['id']);
+    $row   = $GLOBALS['PDO']->single();
+    $email = $row['email'] ?? "";
 } elseif ($_GET['type'] == 'p') {
     // Protest
-    $email = $GLOBALS['db']->GetOne('SELECT email FROM `' . DB_PREFIX . '_protests` WHERE pid = ?', array(
-        $_GET['id']
-    ));
+    $GLOBALS['PDO']->query('SELECT email FROM `:prefix_protests` WHERE pid = :id');
+    $GLOBALS['PDO']->bind(':id', $_GET['id']);
+    $row   = $GLOBALS['PDO']->single();
+    $email = $row['email'] ?? "";
 }
 
 if (empty($email)) {
@@ -69,14 +57,15 @@ if (empty($email)) {
     PageDie();
 }
 
-$theme->assign('email_addr', htmlspecialchars($email));
-$theme->assign('email_js', "CheckEmail('" . $_GET['type'] . "', " . (int) $_GET['id'] . ")");
-?>
+// $_GET['type'] is constrained above to the literal 's' or 'p' and
+// $_GET['id'] is cast to int, so the resulting `CheckEmail('s', 42)`
+// JS expression contains no caller-controlled data and is safe to drop
+// into the template's onclick attribute via {nofilter}.
+$emailJs = "CheckEmail('" . $_GET['type'] . "', " . (int) $_GET['id'] . ")";
 
-<div id="admin-page-content">
-    <div id="1">
-        <?php
-        $theme->display('page_admin_bans_email.tpl');
-        ?>
-    </div>
-</div>
+echo '<div id="admin-page-content"><div id="1">';
+\Sbpp\View\Renderer::render($theme, new \Sbpp\View\AdminBansEmailView(
+    email_addr: (string) $email,
+    email_js: $emailJs,
+));
+echo '</div></div>';

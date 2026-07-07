@@ -31,13 +31,8 @@
 
 #undef REQUIRE_PLUGIN
 #include <adminmenu>
-#tryinclude <updater>
 
 #pragma newdecls required
-
-#if defined _updater_included
-#define UPDATE_URL "https://sbpp.github.io/updater/updatefile.txt"
-#endif
 
 //GLOBAL DEFINES
 #define DISABLE_ADDBAN		1
@@ -120,7 +115,8 @@ SMCParser ConfigParser;
 
 GlobalForward g_hFwd_OnBanAdded
 			, g_hFwd_OnReportAdded
-			, g_hFwd_OnClientPreAdminCheck;
+			, g_hFwd_OnClientPreAdminCheck
+			, g_hFwd_OnClientPostAdminCheck;
 
 Handle PlayerRecheck[MAXPLAYERS + 1] =  { INVALID_HANDLE, ... }; /* Timer handle */
 
@@ -153,6 +149,7 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	g_hFwd_OnBanAdded = CreateGlobalForward("SBPP_OnBanPlayer", ET_Ignore, Param_Cell, Param_Cell, Param_Cell, Param_String);
 	g_hFwd_OnReportAdded = CreateGlobalForward("SBPP_OnReportPlayer", ET_Ignore, Param_Cell, Param_Cell, Param_String);
 	g_hFwd_OnClientPreAdminCheck = CreateGlobalForward("SBPP_OnClientPreAdminCheck", ET_Ignore, Param_Cell);
+	g_hFwd_OnClientPostAdminCheck = CreateGlobalForward("SBPP_OnClientPostAdminCheck", ET_Ignore, Param_Cell);
 
 	LateLoaded = late;
 
@@ -237,24 +234,7 @@ public void OnPluginStart()
 	{
 		AccountForLateLoading();
 	}
-
-	#if defined _updater_included
-	if (LibraryExists("updater"))
-	{
-		Updater_AddPlugin(UPDATE_URL);
-	}
-	#endif
 }
-
-#if defined _updater_included
-public void OnLibraryAdded(const char[] name)
-{
-	if (strcmp(name, "updater", false) == 0)
-	{
-		Updater_AddPlugin(UPDATE_URL);
-	}
-}
-#endif
 
 public void OnAllPluginsLoaded()
 {
@@ -596,10 +576,11 @@ public Action CommandBanIp(int client, int args)
 	dataPack.WriteString(adminAuth);
 	dataPack.WriteString(adminIp);
 
-	char sQuery[256];
+	char sQuery[256], argEscaped[sizeof(arg) * 2 + 1];
+	DB.Escape(arg, argEscaped, sizeof(argEscaped));
 
 	FormatEx(sQuery, sizeof(sQuery), "SELECT bid FROM %s_bans WHERE type = 1 AND ip     = '%s' AND (length = 0 OR ends > UNIX_TIMESTAMP()) AND RemoveType IS NULL",
-		DatabasePrefix, arg);
+		DatabasePrefix, argEscaped);
 
 	DB.Query(SelectBanIpCallback, sQuery, dataPack, DBPrio_High);
 
@@ -646,13 +627,14 @@ public Action CommandUnban(int client, int args)
 	dataPack.WriteString(arg); // Steamid - IP
 	dataPack.WriteString(adminAuth); // Admin SteamID
 
-	char query[256];
+	char query[256], argEscaped[sizeof(arg) * 2 + 1];
+	DB.Escape(arg, argEscaped, sizeof(argEscaped));
 
 	if (strncmp(arg, "STEAM_", 6) == 0)
 	{
-		Format(query, sizeof(query), "SELECT bid FROM %s_bans WHERE (type = 0 AND authid = '%s') AND (length = '0' OR ends > UNIX_TIMESTAMP()) AND RemoveType IS NULL", DatabasePrefix, arg);
+		Format(query, sizeof(query), "SELECT bid FROM %s_bans WHERE (type = 0 AND authid = '%s') AND (length = '0' OR ends > UNIX_TIMESTAMP()) AND RemoveType IS NULL", DatabasePrefix, argEscaped);
 	} else {
-		Format(query, sizeof(query), "SELECT bid FROM %s_bans WHERE (type = 1 AND ip     = '%s') AND (length = '0' OR ends > UNIX_TIMESTAMP()) AND RemoveType IS NULL", DatabasePrefix, arg);
+		Format(query, sizeof(query), "SELECT bid FROM %s_bans WHERE (type = 1 AND ip     = '%s') AND (length = '0' OR ends > UNIX_TIMESTAMP()) AND RemoveType IS NULL", DatabasePrefix, argEscaped);
 	}
 
 	DB.Query(SelectUnbanCallback, query, dataPack);
@@ -734,10 +716,11 @@ public Action CommandAddBan(int client, int args)
 	dataPack.WriteString(adminAuth);
 	dataPack.WriteString(adminIp);
 
-	char sQuery[256];
+	char sQuery[256], authidEscaped[sizeof(authid) * 2 + 1];
+	DB.Escape(authid, authidEscaped, sizeof(authidEscaped));
 
 	FormatEx(sQuery, sizeof sQuery, "SELECT bid FROM %s_bans WHERE type = 0 AND authid = '%s' AND (length = 0 OR ends > UNIX_TIMESTAMP()) AND RemoveType IS NULL",
-		DatabasePrefix, authid);
+		DatabasePrefix, authidEscaped);
 
 	DB.Query(SelectAddbanCallback, sQuery, dataPack, DBPrio_High);
 
@@ -1274,8 +1257,6 @@ public void SelectBanIpCallback(Database db, DBResultSet results, const char[] e
 	DB.Escape(reason, banReason, sizeof(banReason));
 	DB.Escape(targetName, sTEscapedName, sizeof(sTEscapedName));
 
-	LogMessage("******************************Tagetauth: %s", targetAuth);
-
 	if (results == null)
 	{
 		LogToFile(logFile, "Ban IP Select Query Failed: %s", error);
@@ -1344,7 +1325,7 @@ public void InsertBanIpCallback(Database db, DBResultSet results, const char[] e
 		{
 			char length[32];
 			if(minutes == 0)
-				FormatEx(length, sizeof(length), "permament");
+				FormatEx(length, sizeof(length), "permanent");
 			else
 				FormatEx(length, sizeof(length), "%d %s", minutes, minutes == 1 ? "minute" : "minutes");
 
@@ -1626,7 +1607,7 @@ public void AddedFromSQLiteCallback(Database db, DBResultSet results, const char
 	char auth[MAX_AUTHID_LENGTH];
 
 	dataPack.ReadString(auth, sizeof(auth));
-	if (results == null)
+	if (results != null)
 	{
 		// The insert was successful so delete the record from the queue
 		FormatEx(buffer, sizeof(buffer), "DELETE FROM queue WHERE steam_id = '%s'", auth);
@@ -1654,7 +1635,8 @@ public void ServerInfoCallback(Database db, DBResultSet results, const char[] er
 	if (!results.RowCount)
 	{
 		// get the game folder name used to determine the mod
-		char desc[64], query[200], rcon[128];
+		char desc[64], query[512], rcon[128];
+		char descEscaped[sizeof(desc) * 2 + 1], rconEscaped[sizeof(rcon) * 2 + 1];
 		GetGameFolderName(desc, sizeof(desc));
 		Format(rcon, sizeof(rcon), "");
 
@@ -1667,7 +1649,9 @@ public void ServerInfoCallback(Database db, DBResultSet results, const char[] er
 			}
 		}
 
-		FormatEx(query, sizeof(query), "INSERT INTO %s_servers (ip, port, rcon, modid) VALUES ('%s', '%s', '%s', (SELECT mid FROM %s_mods WHERE modfolder = '%s'))", DatabasePrefix, ServerIp, ServerPort, rcon, DatabasePrefix, desc);
+		db.Escape(desc, descEscaped, sizeof(descEscaped));
+		db.Escape(rcon, rconEscaped, sizeof(rconEscaped));
+		FormatEx(query, sizeof(query), "INSERT INTO %s_servers (ip, port, rcon, modid) VALUES ('%s', '%s', '%s', (SELECT mid FROM %s_mods WHERE modfolder = '%s'))", DatabasePrefix, ServerIp, ServerPort, rconEscaped, DatabasePrefix, descEscaped);
 		db.Query(ErrorCheckCallback, query);
 	}
 }
@@ -2613,7 +2597,7 @@ stock void UTIL_InsertTempBan(int time, const char[] name, const char[] auth, co
 	{
 		char length[32];
 		if(time == 0)
-			FormatEx(length, sizeof(length), "permament");
+			FormatEx(length, sizeof(length), "permanent");
 		else
 			FormatEx(length, sizeof(length), "%d %s", time, time == 1 ? "minute" : "minutes");
 		KickClient(client, "%t\n\n%t", "Banned Check Site", WebsiteAddress, "Kick Reason", admin, reason, length);
@@ -2647,6 +2631,10 @@ stock void CheckLoadAdmins(AdminCachePart part)
 		{
 			RunAdminCacheChecks(i);
 			NotifyPostAdminCheck(i);
+
+			Call_StartForward(g_hFwd_OnClientPostAdminCheck);
+			Call_PushCell(i);
+			Call_Finish();
 		}
 	}
 }

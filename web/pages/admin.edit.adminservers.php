@@ -1,148 +1,204 @@
 <?php
-/*************************************************************************
-This file is part of SourceBans++
+// SourceBans++ (c) 2014-2026 SourceBans++ Dev Team
+// Licensed under the Elastic License 2.0.
+// See LICENSE.txt for the full license text and THIRD-PARTY-NOTICES.txt for attributions.
 
-SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
+declare(strict_types=1);
 
-The SourceBans++ Web panel is licensed under a
-Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
-
-You should have received a copy of the license along with this
-work.  If not, see <http://creativecommons.org/licenses/by-nc-sa/3.0/>.
-
-This program is based off work covered by the following copyright(s):
-SourceBans 1.4.11
-Copyright © 2007-2014 SourceBans Team - Part of GameConnect
-Licensed under CC-BY-NC-SA 3.0
-Page: <http://www.sourcebans.net/> - <http://www.gameconnect.net/>
-*************************************************************************/
-
-if (!defined("IN_SB")) {
-    echo "You should not be here. Only follow links!";
+if (!defined('IN_SB')) {
+    echo 'You should not be here. Only follow links!';
     die();
 }
-global $theme;
 
-new AdminTabs([], $userbank, $theme);
+global $userbank, $theme;
 
-if (!isset($_GET['id'])) {
-    echo '<div id="msg-red" >
-	<i class="fas fa-times fa-2x"></i>
-	<b>Error</b>
-	<br />
-	No admin id specified. Please only follow links
-</div>';
-    PageDie();
+new \Sbpp\View\AdminTabs([], $userbank, $theme);
+
+require_once __DIR__ . '/_admin_edit_helpers.php';
+
+$adminId = isset($_GET['id']) ? (int) $_GET['id'] : 0;
+if ($adminId <= 0) {
+    sbpp_admin_edit_die_with_toast(
+        'No admin id specified. Please only follow links.',
+        'index.php?p=admin&c=admins',
+    );
+    return;
 }
 
-if (!$userbank->GetProperty("user", $_GET['id'])) {
-    Log::add("e", "Getting admin data failed", "Can't find data for admin with id $_GET[id].");
-    echo '<div id="msg-red" >
-	<i class="fas fa-times fa-2x"></i>
-	<b>Error</b>
-	<br />
-	Error getting current data.
-</div>';
-    PageDie();
+if (!$userbank->GetProperty('user', $adminId)) {
+    \Sbpp\Log::add(
+        \LogType::Error,
+        'Getting admin data failed',
+        "Can't find data for admin with id {$adminId}.",
+    );
+    sbpp_admin_edit_die_with_toast('Error getting current data.', 'index.php?p=admin&c=admins');
+    return;
 }
 
-$aid = (int) $_GET['id'];
-if (!$userbank->HasAccess(ADMIN_OWNER | ADMIN_EDIT_ADMINS)) {
-    Log::add("w", "Hacking Attempt", $userbank->GetProperty("user")." tried to edit ".$userbank->GetProperty('user', $_GET['id'])."'s server access, but doesnt have access.");
-    echo '<div id="msg-red" >
-	<i class="fas fa-times fa-2x"></i>
-	<b>Error</b>
-	<br />
-	You are not allowed to edit admins server access.
-</div>';
-    PageDie();
+if (!$userbank->HasAccess(\WebPermission::mask(\WebPermission::Owner, \WebPermission::EditAdmins))) {
+    \Sbpp\Log::add(
+        \LogType::Warning,
+        'Hacking Attempt',
+        $userbank->GetProperty('user') . ' tried to edit '
+        . $userbank->GetProperty('user', $adminId) . "'s server access, but doesn't have access.",
+    );
+    sbpp_admin_edit_die_with_toast(
+        "You aren't allowed to edit other admin's server access.",
+        'index.php?p=admin&c=admins',
+    );
+    return;
 }
 
-$servers    = $GLOBALS['db']->GetAll("SELECT `server_id`, `srv_group_id` FROM " . DB_PREFIX . "_admins_servers_groups WHERE admin_id = " . (int) $aid);
-$adminGroup = $GLOBALS['db']->GetAll('SELECT id FROM ' . DB_PREFIX . '_srvgroups sg, ' . DB_PREFIX . '_admins a WHERE sg.name = a.srv_group and a.aid = ? limit 1', array(
-    $aid
-));
+$pdo = $GLOBALS['PDO'];
 
-$server_grp = isset($adminGroup[0]['id']) ? $adminGroup[0]['id'] : 0;
+/**
+ * @return list<array{server_id: string, srv_group_id: string}>
+ */
+$loadAssignments = static function (int $aid) use ($pdo): array {
+    $rows = $pdo->query(
+        'SELECT `server_id`, `srv_group_id` FROM `:prefix_admins_servers_groups` WHERE admin_id = :aid'
+    )->resultset([':aid' => $aid]);
 
+    $out = [];
+    foreach ($rows as $row) {
+        $out[] = [
+            'server_id'    => (string) ($row['server_id']    ?? '-1'),
+            'srv_group_id' => (string) ($row['srv_group_id'] ?? '-1'),
+        ];
+    }
+    return $out;
+};
+
+$existingAssignments = $loadAssignments($adminId);
+
+// Resolve the admin's server-group id (via the joined name lookup the
+// legacy handler did). Used as the `group_id` column on every new
+// assignment row — keeps the legacy semantics intact.
+$serverGroupId = (int) ($pdo->query(
+    'SELECT id FROM `:prefix_srvgroups` sg, `:prefix_admins` a
+        WHERE sg.name = a.srv_group AND a.aid = :aid LIMIT 1'
+)->single([':aid' => $adminId])['id'] ?? 0);
+
+$postSuccess    = false;
+$postRehashSids = [];
 
 if (isset($_POST['editadminserver'])) {
-    // clear old stuffs
-    $GLOBALS['db']->Execute("DELETE FROM " . DB_PREFIX . "_admins_servers_groups WHERE admin_id = {$aid}");
-    if (isset($_POST['servers']) && is_array($_POST['servers']) && count($_POST['servers']) > 0) {
+    \CSRF::rejectIfInvalid();
+
+    /** @var list<int> $serverIds */
+    $serverIds = [];
+    if (isset($_POST['servers']) && is_array($_POST['servers'])) {
         foreach ($_POST['servers'] as $s) {
-            $pre = $GLOBALS['db']->Prepare("INSERT INTO " . DB_PREFIX . "_admins_servers_groups(admin_id,group_id,srv_group_id,server_id) VALUES (?,?,?,?)");
-            $GLOBALS['db']->Execute($pre, array(
-                $aid,
-                $server_grp,
-                -1,
-                (int) substr($s, 1)
-            ));
+            $sid = (int) substr((string) $s, 1);
+            if ($sid > 0 && !in_array($sid, $serverIds, true)) {
+                $serverIds[] = $sid;
+            }
         }
     }
-    if (isset($_POST['group']) && is_array($_POST['group']) && count($_POST['group']) > 0) {
+
+    /** @var list<int> $groupIds */
+    $groupIds = [];
+    if (isset($_POST['group']) && is_array($_POST['group'])) {
         foreach ($_POST['group'] as $g) {
-            $pre = $GLOBALS['db']->Prepare("INSERT INTO " . DB_PREFIX . "_admins_servers_groups(admin_id,group_id,srv_group_id,server_id) VALUES (?,?,?,?)");
-            $GLOBALS['db']->Execute($pre, array(
-                $aid,
-                $server_grp,
-                (int) substr($g, 1),
-                -1
-            ));
+            $gid = (int) substr((string) $g, 1);
+            if ($gid > 0 && !in_array($gid, $groupIds, true)) {
+                $groupIds[] = $gid;
+            }
         }
     }
-    if (Config::getBool('config.enableadminrehashing')) {
-        // rehash the admins on the servers
-        $serveraccessq = $GLOBALS['db']->GetAll("SELECT s.sid FROM `" . DB_PREFIX . "_servers` s
-												LEFT JOIN `" . DB_PREFIX . "_admins_servers_groups` asg ON asg.admin_id = '" . (int) $aid . "'
-												LEFT JOIN `" . DB_PREFIX . "_servers_groups` sg ON sg.group_id = asg.srv_group_id
-												WHERE ((asg.server_id != '-1' AND asg.srv_group_id = '-1')
-												OR (asg.srv_group_id != '-1' AND asg.server_id = '-1'))
-												AND (s.sid IN(asg.server_id) OR s.sid IN(sg.server_id)) AND s.enabled = 1");
 
-        $allservers = [];
-        foreach ($serveraccessq as $access) {
-            if (!in_array($access['sid'], $allservers)) {
-                $allservers[] = $access['sid'];
-            }
+    // The `:prefix_admins_servers_groups` table has no UNIQUE
+    // covering (admin_id, srv_group_id, server_id) so we can't lean
+    // on `INSERT ... ON DUPLICATE KEY UPDATE`. The transaction wrap
+    // keeps the DELETE-then-INSERT atomic — a half-applied state was
+    // possible pre-rewrite. (Adding the UNIQUE would need a paired
+    // schema migration and is out of #5's scope.)
+    $pdo->beginTransaction();
+    try {
+        $pdo->query('DELETE FROM `:prefix_admins_servers_groups` WHERE admin_id = :aid');
+        $pdo->bind(':aid', $adminId);
+        $pdo->execute();
+
+        $insert = static function (int $sgId, int $sid) use ($pdo, $adminId, $serverGroupId): void {
+            $pdo->query(
+                'INSERT INTO `:prefix_admins_servers_groups`
+                    (admin_id, group_id, srv_group_id, server_id)
+                    VALUES (:aid, :gid, :srv_group_id, :server_id)'
+            );
+            $pdo->bindMultiple([
+                ':aid'          => $adminId,
+                ':gid'          => $serverGroupId,
+                ':srv_group_id' => $sgId,
+                ':server_id'    => $sid,
+            ]);
+            $pdo->execute();
+        };
+
+        foreach ($serverIds as $sid) {
+            $insert(-1, $sid);
+        }
+        foreach ($groupIds as $gid) {
+            $insert($gid, -1);
         }
 
-        // Add all servers, he's been admin on before
-        foreach ($servers as $server) {
-            if ($server['server_id'] != "-1" && !in_array((int) $server['server_id'], $allservers)) {
-                $allservers[] = (int) $server['server_id'];
-            }
+        $pdo->endTransaction();
+    } catch (\Throwable $e) {
+        $pdo->cancelTransaction();
+        throw $e;
+    }
 
-            // old server groups
-            $serv_in_grp = $GLOBALS['db']->GetAll('SELECT server_id FROM `' . DB_PREFIX . '_servers_groups` WHERE group_id = ?;', array(
-                (int) $server['srv_group_id']
-            ));
-            foreach ($serv_in_grp as $srg) {
-                if ($srg['server_id'] != "-1" && !in_array((int) $srg['server_id'], $allservers)) {
-                    $allservers[] = (int) $srg['server_id'];
+    $admName = (string) ($pdo->query('SELECT user FROM `:prefix_admins` WHERE aid = :aid')
+        ->single([':aid' => $adminId])['user'] ?? '');
+    \Sbpp\Log::add(
+        \LogType::Message,
+        'Admin Servers Updated',
+        "Admin ({$admName}) server access has been changed.",
+    );
+
+    if (\Config::getBool('config.enableadminrehashing')) {
+        // Mirror of the legacy "every server the admin still has
+        // access to AFTER the swap" SELECT, plus the "every server
+        // the admin used to have access to BEFORE the swap" union
+        // (so a removed server still gets a rehash).
+        $postRehashSids = sbpp_admin_edit_collect_rehash_sids($adminId);
+        foreach ($existingAssignments as $row) {
+            $oldSid   = (int) $row['server_id'];
+            $oldGroup = (int) $row['srv_group_id'];
+            if ($oldSid > 0 && !in_array($oldSid, $postRehashSids, true)) {
+                $postRehashSids[] = $oldSid;
+            }
+            if ($oldGroup > 0) {
+                $sids = $pdo->query('SELECT server_id FROM `:prefix_servers_groups` WHERE group_id = :gid')
+                    ->resultset([':gid' => $oldGroup]);
+                foreach ($sids as $row2) {
+                    $sid = (int) ($row2['server_id'] ?? 0);
+                    if ($sid > 0 && !in_array($sid, $postRehashSids, true)) {
+                        $postRehashSids[] = $sid;
+                    }
                 }
             }
         }
-
-        echo '<script>ShowRehashBox("' . implode(",", $allservers) . '", "Admin server access updated", "The admin server access has been updated successfully", "green", "index.php?p=admin&c=admins");TabToReload();</script>';
-    } else {
-        echo '<script>ShowBox("Admin server access updated", "The admin server access has been updated successfully", "green", "index.php?p=admin&c=admins");TabToReload();</script>';
     }
 
-    $admname = $GLOBALS['db']->GetRow("SELECT user FROM `" . DB_PREFIX . "_admins` WHERE aid = ?", array(
-        (int) $aid
-    ));
-    Log::add("m", "Admin Servers Updated", "Admin ($admname[user]) server access has been changed.");
+    $existingAssignments = $loadAssignments($adminId);
+    $postSuccess         = true;
 }
 
+$serverList = $pdo->query('SELECT * FROM `:prefix_servers`')->resultset();
+$groupList  = $pdo->query("SELECT * FROM `:prefix_groups` WHERE type = '3'")->resultset();
 
-$server_list = $GLOBALS['db']->GetAll("SELECT * FROM `" . DB_PREFIX . "_servers`");
-$group_list  = $GLOBALS['db']->GetAll("SELECT * FROM `" . DB_PREFIX . "_groups` WHERE type = '3'");
-$rowcount    = (count($server_list) + count($group_list));
+\Sbpp\View\Renderer::render($theme, new \Sbpp\View\EditAdminServersView(
+    row_count:        count($serverList) + count($groupList),
+    group_list:       $groupList,
+    server_list:      $serverList,
+    assigned_servers: $existingAssignments,
+));
 
-$theme->assign('row_count', $rowcount);
-$theme->assign('group_list', $group_list);
-$theme->assign('server_list', $server_list);
-$theme->assign('assigned_servers', $servers);
-
-$theme->display('page_admin_edit_admins_servers.tpl');
+sbpp_admin_edit_emit_tail_script(
+    successTitle:    'Admin server access updated',
+    successBody:     'The admin server access has been updated successfully.',
+    successRedirect: 'index.php?p=admin&c=admins',
+    postSuccess:     $postSuccess,
+    rehashSids:      $postRehashSids,
+    validationErrors:[],
+);

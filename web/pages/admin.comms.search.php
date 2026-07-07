@@ -1,63 +1,49 @@
 <?php
-/*************************************************************************
-This file is part of SourceBans++
-
-SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
-
-The SourceBans++ Web panel is licensed under a
-Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
-
-You should have received a copy of the license along with this
-work.  If not, see <http://creativecommons.org/licenses/by-nc-sa/3.0/>.
-
-This program is based off work covered by the following copyright(s):
-SourceBans 1.4.11
-Copyright © 2007-2014 SourceBans Team - Part of GameConnect
-Licensed under CC-BY-NC-SA 3.0
-Page: <http://www.sourcebans.net/> - <http://www.gameconnect.net/>
-
-SourceComms 0.9.266
-Copyright (C) 2013-2014 Alexandr Duplishchev
-Licensed under GNU GPL version 3, or later.
-Page: <https://forums.alliedmods.net/showthread.php?p=1883705> - <https://github.com/d-ai/SourceComms>
-*************************************************************************/
+// SourceBans++ (c) 2014-2026 SourceBans++ Dev Team
+// Licensed under the Elastic License 2.0.
+// See LICENSE.txt for the full license text and THIRD-PARTY-NOTICES.txt for attributions.
 
 global $userbank, $theme;
-$admin_list   = $GLOBALS['db']->GetAll("SELECT * FROM `" . DB_PREFIX . "_admins` ORDER BY user ASC");
-$server_list  = $GLOBALS['db']->Execute("SELECT sid, ip, port FROM `" . DB_PREFIX . "_servers` WHERE enabled = 1");
-$servers      = [];
-$serverscript = "<script type=\"text/javascript\">";
-while (!$server_list->EOF) {
-    $info = [];
-    $serverscript .= "xajax_ServerHostPlayers('" . $server_list->fields[0] . "', 'id', 'ss" . $server_list->fields[0] . "', '', '', false, 200);";
-    $info['sid']  = $server_list->fields[0];
-    $info['ip']   = $server_list->fields[1];
-    $info['port'] = $server_list->fields[2];
-    array_push($servers, $info);
-    $server_list->MoveNext();
-}
-$serverscript .= "</script>";
-$page = isset($_GET['page']) ? $_GET['page'] : 1;
 
-$theme->assign('hideplayerips', (Config::getBool('banlist.hideplayerips') && !$userbank->is_admin()));
-$theme->assign('is_admin', $userbank->is_admin());
-$theme->assign('admin_list', $admin_list);
-$theme->assign('server_list', $servers);
-$theme->assign('server_script', $serverscript);
+$admin_list = $GLOBALS['PDO']->query("SELECT * FROM `:prefix_admins` ORDER BY user ASC")->resultset();
 
-$theme->display('box_admin_comms_search.tpl');
-?>
-<script type="text/javascript">
-function switch_length(opt)
-{
-    if(opt.options[opt.selectedIndex].value=='other')
-    {
-        $('other_length').setStyle('display', 'block');
-        $('other_length').focus();
-        $('length').setStyle('width', '20px');
-    } else {
-        $('other_length').setStyle('display', 'none');
-        $('length').setStyle('width', '210px');
-    }
+// Server list, plus a server-built `<script>` blob preserved for any
+// third-party theme that forked the pre-v2.0.0 default and consumes
+// `{$server_script nofilter}` to populate each
+// `<option id="ssSID">Loading…</option>`. The shipped template owns
+// its own inline initializer (and carries an `{if false}…{/if}`
+// parity reference to `$server_script` to keep SmartyTemplateRule's
+// "unused property" check green) and ignores the blob built here.
+//
+// Inputs to the blob are server-controlled integers (`:prefix_servers.sid`)
+// only — no user input flows into the emitted JS. Safe under the
+// `{$server_script nofilter}` annotation.
+$server_rows  = $GLOBALS['PDO']->query("SELECT sid, ip, port FROM `:prefix_servers` WHERE enabled = 1")->resultset();
+$server_list  = [];
+$serverscript = '<script>(function(){'
+    . 'if (typeof sb === "undefined" || !sb || !sb.api || typeof Actions === "undefined") return;';
+foreach ($server_rows as $row) {
+    $sid           = (int) $row['sid'];
+    $server_list[] = [
+        'sid'  => $sid,
+        'ip'   => (string) $row['ip'],
+        'port' => (int) $row['port'],
+    ];
+    $serverscript .= 'sb.api.call(Actions.ServersHostPlayers,{sid:' . $sid . ',trunchostname:200}).then(function(r){'
+        . 'var el=document.getElementById("ss' . $sid . '");'
+        . 'if(!el)return;'
+        . 'if(!r||!r.ok||!r.data){el.textContent="Offline";return;}'
+        . 'var d=r.data;'
+        . 'if(d.error==="connect"){el.textContent="Offline ("+d.ip+":"+d.port+")";return;}'
+        . 'el.textContent=(d.hostname||"")+" ("+d.ip+":"+d.port+")";'
+        . '});';
 }
-</script>
+$serverscript .= '})();</script>';
+
+\Sbpp\View\Renderer::render($theme, new \Sbpp\View\AdminCommsSearchView(
+    admin_list:    $admin_list,
+    server_list:   $server_list,
+    server_script: $serverscript,
+    hideadminname: (Config::getBool('banlist.hideadminname') && !$userbank->is_admin()),
+    is_admin:      $userbank->is_admin(),
+));

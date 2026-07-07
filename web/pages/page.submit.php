@@ -1,21 +1,7 @@
 <?php
-/*************************************************************************
-This file is part of SourceBans++
-
-SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
-
-The SourceBans++ Web panel is licensed under a
-Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
-
-You should have received a copy of the license along with this
-work.  If not, see <http://creativecommons.org/licenses/by-nc-sa/3.0/>.
-
-This program is based off work covered by the following copyright(s):
-SourceBans 1.4.11
-Copyright © 2007-2014 SourceBans Team - Part of GameConnect
-Licensed under CC-BY-NC-SA 3.0
-Page: <http://www.sourcebans.net/> - <http://www.gameconnect.net/>
-*************************************************************************/
+// SourceBans++ (c) 2014-2026 SourceBans++ Dev Team
+// Licensed under the Elastic License 2.0.
+// See LICENSE.txt for the full license text and THIRD-PARTY-NOTICES.txt for attributions.
 
 global $userbank, $theme;
 
@@ -28,8 +14,20 @@ if (!defined("IN_SB")) {
     echo "You should not be here. Only follow links!";
     die();
 }
+
+// Toast emission consolidated onto `Sbpp\View\Toast::emit` (#1403). The
+// previous local `emitSubmitToast()` helper was the prototype shape this
+// surface used to work around the v1.x `<script>ShowBox(…)</script>`
+// blobs throwing `ReferenceError` after #1123 D1 deleted
+// `web/scripts/sourcebans.js`. The lift unifies that pattern with the
+// five sister pages the #1403 audit caught still emitting raw
+// `<script>ShowBox(...)</script>` (lostpassword / protest / banlist /
+// commslist / admin.edit.comms) so every chrome-toast emission goes
+// through one helper + one wire format. See `web/includes/View/Toast.php`
+// for the contract.
+
 if (!Config::getBool('config.enablesubmit')) {
-    print "<script>ShowBox('Error', 'This page is disabled. You should not be here.', 'red');</script>";
+    \Sbpp\View\Toast::emit('error', 'Submissions disabled', 'This page is disabled. You should not be here.');
     PageDie();
 }
 if (!isset($_POST['subban']) || $_POST['subban'] != 1) {
@@ -41,21 +39,37 @@ if (!isset($_POST['subban']) || $_POST['subban'] != 1) {
     $Email         = "";
     $SID           = -1;
 } else {
-    $SteamID       = trim(htmlspecialchars($_POST['SteamID']));
-    $BanIP         = trim(htmlspecialchars($_POST['BanIP']));
-    $PlayerName    = htmlspecialchars($_POST['PlayerName']);
-    $BanReason     = htmlspecialchars($_POST['BanReason']);
-    $SubmitterName = htmlspecialchars($_POST['SubmitName']);
-    $Email         = trim(htmlspecialchars($_POST['EmailAddr']));
-    $SID           = (int) $_POST['server'];
+    $SteamID       = trim((string) ($_POST['SteamID']    ?? ''));
+    $BanIP         = trim((string) ($_POST['BanIP']      ?? ''));
+    $PlayerName    = (string) ($_POST['PlayerName']  ?? '');
+    $BanReason     = (string) ($_POST['BanReason']   ?? '');
+    $SubmitterName = (string) ($_POST['SubmitName']  ?? '');
+    $Email         = trim((string) ($_POST['EmailAddr']  ?? ''));
+    $SID           = (int) ($_POST['server']         ?? -1);
     $validsubmit   = true;
     $errors        = "";
-    if ((strlen($SteamID) != 0 && $SteamID != "STEAM_0:") && !\SteamID\SteamID::isValidID($SteamID)) {
+    // #1420 follow-up #2: the legacy `STEAM_0:` sentinel that the
+    // page handler used to re-emit when the SteamID was blank was
+    // dropped in the same commit that added the strict
+    // `pattern="STEAM_[01]:[01]:\d+|\[U:1:\d+\]|\d{17}"` attribute to
+    // the form input — the sentinel would have failed the pattern
+    // check AND blocked submission for the legitimate IP-only path.
+    // With the sentinel gone, `$SteamID === ''` is the canonical
+    // "no Steam ID typed" state and both server-side rules below
+    // (validate-shape + at-least-one-of) key off it.
+    if (strlen($SteamID) != 0 && !\SteamID\SteamID::isValidID($SteamID)) {
         $errors .= '* Please type a valid STEAM ID.<br>';
         $validsubmit = false;
     }
     if (strlen($BanIP) != 0 && !filter_var($BanIP, FILTER_VALIDATE_IP)) {
         $errors .= '* Please type a valid IP-address.<br>';
+        $validsubmit = false;
+    }
+    // #1207 PUB-4: at least one of Steam ID / IP must be provided.
+    // Mirrors the inline guard in `page_submitban.tpl` so JS-off
+    // visitors can't sneak an empty pair past the form.
+    if (strlen($SteamID) == 0 && strlen($BanIP) == 0) {
+        $errors .= '* Please enter a Steam ID or an IP address before submitting.<br>';
         $validsubmit = false;
     }
     if (strlen($PlayerName) == 0) {
@@ -80,18 +94,25 @@ if (!isset($_POST['subban']) || $_POST['subban'] != 1) {
             $validsubmit = false;
         }
     }
-    $checkres = $GLOBALS['db']->Execute("SELECT length FROM " . DB_PREFIX . "_bans WHERE authid = ? AND RemoveType IS NULL", array(
-        $SteamID
-    ));
-    $numcheck = $checkres->RecordCount();
-    if ($numcheck == 1 && $checkres->fields['length'] == 0) {
+    $GLOBALS['PDO']->query("SELECT length FROM `:prefix_bans` WHERE authid = :authid AND RemoveType IS NULL");
+    $GLOBALS['PDO']->bind(':authid', $SteamID);
+    $checkres = $GLOBALS['PDO']->resultset();
+    if (count($checkres) == 1 && $checkres[0]['length'] == 0) {
         $errors .= '* The player is already banned permanent.<br>';
         $validsubmit = false;
     }
 
 
     if (!$validsubmit) {
-        print "<script>ShowBox('Error', '$errors', 'red');</script>";
+        // Validation errors are accumulated as `* msg<br>` HTML
+        // fragments (legacy ShowBox markup). Convert <br> separators
+        // to plain spaces so the toast `body` (rendered as text via
+        // theme.js's escapeHtml) reads as a single line per error.
+        \Sbpp\View\Toast::emit(
+            'error',
+            'Please fix the following',
+            (string) preg_replace('#<br\s*/?>#i', ' ', $errors),
+        );
     }
 
     if ($validsubmit) {
@@ -127,11 +148,14 @@ if (!isset($_POST['subban']) || $_POST['subban'] != 1) {
                 $mailserver = "Server: Other server\n";
                 $modid['mid']   = 0;
             }
-            if ($SteamID == "STEAM_0:") {
-                $SteamID = "";
-            }
-            $pre = $GLOBALS['db']->Prepare("INSERT INTO " . DB_PREFIX . "_submissions(submitted,SteamId,name,email,ModID,reason,ip,subname,sip,archiv,server) VALUES (UNIX_TIMESTAMP(),?,?,?,?,?,?,?,?,0,?)");
-            $GLOBALS['db']->Execute($pre, array(
+            // #1420 follow-up #2: the legacy `STEAM_0:` empty sentinel
+            // was dropped at the top of this handler — the operator-side
+            // shape is now strictly "empty string" for the no-Steam-ID
+            // path, and the strict `pattern="…"` on the form input plus
+            // the server-side `SteamID::isValidID()` gate above mean
+            // anything reaching here is either '' or a fully-formed
+            // SteamID. No defensive sentinel collapse needed.
+            $GLOBALS['PDO']->query("INSERT INTO `:prefix_submissions`(submitted,SteamId,name,email,ModID,reason,ip,subname,sip,archiv,server) VALUES (UNIX_TIMESTAMP(),?,?,?,?,?,?,?,?,0,?)")->execute([
                 $SteamID,
                 $PlayerName,
                 $Email,
@@ -140,16 +164,16 @@ if (!isset($_POST['subban']) || $_POST['subban'] != 1) {
                 $_SERVER['REMOTE_ADDR'],
                 $SubmitterName,
                 $BanIP,
-                $SID
-            ));
-            $subid = (int) $GLOBALS['db']->Insert_ID();
+                $SID,
+            ]);
+            $subid = (int) $GLOBALS['PDO']->lastInsertId();
 
             if (!empty($_FILES['demo_file']['name'])) {
-                $GLOBALS['db']->Execute("INSERT INTO " . DB_PREFIX . "_demos(demid,demtype,filename,origname) VALUES (?, 'S', ?, ?)", array(
+                $GLOBALS['PDO']->query("INSERT INTO `:prefix_demos`(demid,demtype,filename,origname) VALUES (?, 'S', ?, ?)")->execute([
                     $subid,
                     $filename,
-                    $_FILES['demo_file']['name']
-                ));
+                    $_FILES['demo_file']['name'],
+                ]);
             }
             $SteamID       = "";
             $BanIP         = "";
@@ -163,11 +187,12 @@ if (!isset($_POST['subban']) || $_POST['subban'] != 1) {
             $headers = 'From: ' . SB_EMAIL . "\n" . 'X-Mailer: PHP/' . phpversion();
 
             $admins = $userbank->GetAllAdmins();
-            $requri = substr($_SERVER['REQUEST_URI'], 0, strrpos($_SERVER['REQUEST_URI'], ".php") - 5);
+            $requestUri = (string) ($_SERVER['REQUEST_URI'] ?? '');
+            $requri = substr($requestUri, 0, (int) strrpos($requestUri, ".php") - 5);
             $mailDests = [];
 
             foreach ($admins as $admin) {
-                if ($userbank->HasAccess(ADMIN_OWNER | ADMIN_BAN_SUBMISSIONS, $admin['aid']) || $userbank->HasAccess(ADMIN_NOTIFY_SUB, $admin['aid'])) {
+                if ($userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::BanSubmissions), $admin['aid']) || $userbank->HasAccess(WebPermission::NotifySub, $admin['aid'])) {
                     $mailDests []= $admin['email'];
                 }
             }
@@ -184,14 +209,27 @@ if (!isset($_POST['subban']) || $_POST['subban'] != 1) {
                     '{server}' => $mailserver,
                     '{reason}' => $_POST['BanReason'],
                     '{home}' => Host::complete(true),
-                    '{link}' => Host::complete(true) . '/index.php?p=admin&c=bans#%5E2'
+                    // #1275 — admin-bans is Pattern A; the legacy `#^2`
+                    // anchor that targeted the old page-toc chrome is no
+                    // longer wired. Link directly to the submissions
+                    // section so the email recipient lands on the queue
+                    // they're being asked to review.
+                    '{link}' => Host::complete(true) . '/index.php?p=admin&c=bans&section=submissions'
                 ]);
             }
 
-            print "<script>ShowBox('Successful', 'Your submission has been added into the database, and will be reviewed by one of our admins.', 'green');</script>";
+            \Sbpp\View\Toast::emit(
+                'success',
+                'Submitted',
+                'Your submission has been added into the database, and will be reviewed by one of our admins.',
+            );
         } else {
-            print "<script>ShowBox('Error', 'There was an error uploading your demo to the server. Please try again later.', 'red');</script>";
-            Log::add("e", "Demo Upload Failed", "A demo failed to upload for a submission from ($Email)");
+            \Sbpp\View\Toast::emit(
+                'error',
+                'Upload failed',
+                'There was an error uploading your demo to the server. Please try again later.',
+            );
+            Log::add(LogType::Error, "Demo Upload Failed", "A demo failed to upload for a submission from ($Email)");
         }
     }
 }
@@ -213,13 +251,21 @@ foreach ($servers as $key => $server) {
     }
 }
 
-$theme->assign('STEAMID', $SteamID == "" ? "STEAM_0:" : $SteamID);
-$theme->assign('ban_ip', $BanIP);
-$theme->assign('ban_reason', $BanReason);
-$theme->assign('player_name', $PlayerName);
-$theme->assign('subplayer_name', $SubmitterName);
-$theme->assign('player_email', $Email);
-$theme->assign('server_list', $servers);
-$theme->assign('server_selected', $SID);
-
-$theme->display('page_submitban.tpl');
+\Sbpp\View\Renderer::render($theme, new \Sbpp\View\SubmitBanView(
+    // #1420 follow-up #2: re-emit the raw input verbatim (or '' on the
+    // first-paint / IP-only path). The legacy `STEAM_0:` sentinel was
+    // pre-fill UX that broke the moment the template grew a strict
+    // `pattern="…"` attribute — the sentinel didn't match the regex
+    // and the browser blocked submission for legit IP-only flows.
+    // The form's `placeholder="STEAM_0:0:12345"` is the modern shape
+    // for "show the operator what we expect" without populating the
+    // input.
+    STEAMID: $SteamID,
+    ban_ip: $BanIP,
+    player_name: $PlayerName,
+    ban_reason: $BanReason,
+    subplayer_name: $SubmitterName,
+    player_email: $Email,
+    server_list: $servers,
+    server_selected: $SID,
+));

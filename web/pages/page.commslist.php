@@ -1,26 +1,7 @@
 <?php
-/*************************************************************************
-This file is part of SourceBans++
-
-SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
-
-The SourceBans++ Web panel is licensed under a
-Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
-
-You should have received a copy of the license along with this
-work.  If not, see <http://creativecommons.org/licenses/by-nc-sa/3.0/>.
-
-This program is based off work covered by the following copyright(s):
-SourceBans 1.4.11
-Copyright © 2007-2014 SourceBans Team - Part of GameConnect
-Licensed under CC-BY-NC-SA 3.0
-Page: <http://www.sourcebans.net/> - <http://www.gameconnect.net/>
-
-SourceComms 0.9.266
-Copyright (C) 2013-2014 Alexandr Duplishchev
-Licensed under GNU GPL version 3, or later.
-Page: <https://forums.alliedmods.net/showthread.php?p=1883705> - <https://github.com/d-ai/SourceComms>
-*************************************************************************/
+// SourceBans++ (c) 2014-2026 SourceBans++ Dev Team
+// Licensed under the Elastic License 2.0.
+// See LICENSE.txt for the full license text and THIRD-PARTY-NOTICES.txt for attributions.
 
 use SteamID\SteamID;
 
@@ -31,7 +12,7 @@ if (!defined("IN_SB")) {
     die();
 }
 if (!Config::getBool('config.enablecomms')) {
-    print "<script>ShowBox('Error', 'This page is disabled. You should not be here.', 'red');</script>";
+    \Sbpp\View\Toast::emit('error', 'Error', 'This page is disabled. You should not be here.');
     PageDie();
 }
 $BansPerPage = SB_BANS_PER_PAGE;
@@ -45,7 +26,7 @@ function setPostKey()
         $_SESSION['banlist_postkey'] = md5(time() . rand(0, 100000));
     }
 }
-if (!isset($_SESSION['banlist_postkey']) || strlen($_SESSION['banlist_postkey']) < 4) {
+if (!isset($_SESSION['banlist_postkey']) || strlen((string) $_SESSION['banlist_postkey']) < 4) {
     setPostKey();
 }
 
@@ -55,7 +36,7 @@ $pagelink = "";
 PruneComms();
 
 if (isset($_GET['page']) && $_GET['page'] > 0) {
-    $page     = intval($_GET['page']);
+    $page     = (int) $_GET['page'];
     $pagelink = "&page=" . $page;
 }
 
@@ -63,108 +44,213 @@ if (isset($_GET['a']) && $_GET['a'] == "ungag" && isset($_GET['id'])) {
     if ($_GET['key'] != $_SESSION['banlist_postkey']) {
         die("Possible hacking attempt (URL Key mismatch)");
     }
+    // #1301: see page.banlist.php for the full rationale. Both the
+    // legacy GET path and the JSON twin (api_comms_unblock) now
+    // require a non-empty `ureason` so the audit log carries the
+    // *why* behind every block lift, restoring v1.x parity.
+    $unbanReasonRaw = trim((string) ($_GET['ureason'] ?? ''));
+    if ($unbanReasonRaw === '') {
+        \Sbpp\View\Toast::emit(
+            'error',
+            'Unblock Reason Required',
+            'You must supply a reason when ungagging a player.',
+            "index.php?p=commslist$pagelink",
+        );
+        PageDie();
+    }
     //we have a multiple unban asking
-    $bid = intval($_GET['id']);
-    $res = $GLOBALS['db']->Execute("SELECT a.aid, a.gid FROM `" . DB_PREFIX . "_comms` c INNER JOIN " . DB_PREFIX . "_admins a ON a.aid = c.aid WHERE bid = '" . $bid . "' AND c.type = 2;");
-    if (!$userbank->HasAccess(ADMIN_OWNER | ADMIN_UNBAN) && !($userbank->HasAccess(ADMIN_UNBAN_OWN_BANS) && $res->fields['aid'] == $userbank->GetAid()) && !($userbank->HasAccess(ADMIN_UNBAN_GROUP_BANS) && $res->fields['gid'] == $userbank->GetProperty('gid'))) {
+    $bid = (int) $_GET['id'];
+    $GLOBALS['PDO']->query("SELECT a.aid, a.gid FROM `:prefix_comms` c INNER JOIN `:prefix_admins` a ON a.aid = c.aid WHERE bid = :bid AND c.type = 2");
+    $GLOBALS['PDO']->bind(':bid', $bid);
+    $res = $GLOBALS['PDO']->single();
+    if (!$userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::Unban)) && !($userbank->HasAccess(WebPermission::UnbanOwnBans) && $res['aid'] == $userbank->GetAid()) && !($userbank->HasAccess(WebPermission::UnbanGroupBans) && $res['gid'] == $userbank->GetProperty('gid'))) {
         die("You don't have access to this");
     }
 
-    $row = $GLOBALS['db']->GetRow("SELECT b.authid, b.name, b.created, b.sid, UNIX_TIMESTAMP() as now
-										FROM " . DB_PREFIX . "_comms b
-										LEFT JOIN " . DB_PREFIX . "_servers s ON s.sid = b.sid
-										WHERE b.bid = ? AND b.RemoveType IS NULL AND b.type = 2 AND (b.length = '0' OR b.ends > UNIX_TIMESTAMP())", array(
-        $bid
-    ));
+    $GLOBALS['PDO']->query("SELECT b.authid, b.name, b.created, b.sid, UNIX_TIMESTAMP() as now
+										FROM `:prefix_comms` b
+										LEFT JOIN `:prefix_servers` s ON s.sid = b.sid
+										WHERE b.bid = :bid AND b.RemoveType IS NULL AND b.type = 2 AND (b.length = '0' OR b.ends > UNIX_TIMESTAMP())");
+    $GLOBALS['PDO']->bind(':bid', $bid);
+    $row = $GLOBALS['PDO']->single();
     if (empty($row) || !$row) {
-        echo "<script>ShowBox('Player Not UnGagged', 'The player was not ungagged, either already ungagged or not a valid block.', 'red', 'index.php?p=commslist$pagelink');</script>";
+        \Sbpp\View\Toast::emit(
+            'error',
+            'Player Not UnGagged',
+            'The player was not ungagged, either already ungagged or not a valid block.',
+            "index.php?p=commslist$pagelink",
+        );
         PageDie();
     }
 
-    $unbanReason = htmlspecialchars(trim($_GET['ureason']));
-    $ins         = $GLOBALS['db']->Execute("UPDATE `" . DB_PREFIX . "_comms` SET
-										`RemovedBy` = ?,
-										`RemoveType` = 'U',
+    $unbanReason = htmlspecialchars($unbanReasonRaw);
+    $GLOBALS['PDO']->query("UPDATE `:prefix_comms` SET
+										`RemovedBy` = :removedby,
+										`RemoveType` = :rtype,
 										`RemovedOn` = UNIX_TIMESTAMP(),
-										`ureason` = ?
-										WHERE `bid` = ?;", array(
-        $userbank->GetAid(),
-        $unbanReason,
-        $bid
-    ));
+										`ureason` = :ureason
+										WHERE `bid` = :bid");
+    $GLOBALS['PDO']->bindMultiple([
+        ':removedby' => $userbank->GetAid(),
+        ':rtype'     => BanRemoval::Unbanned->value,
+        ':ureason'   => $unbanReason,
+        ':bid'       => $bid,
+    ]);
+    $GLOBALS['PDO']->execute();
 
-    $blocked = $GLOBALS['db']->GetAll("SELECT sid FROM `" . DB_PREFIX . "_servers` WHERE `enabled`=1");
+    $blocked = $GLOBALS['PDO']->query("SELECT sid FROM `:prefix_servers` WHERE `enabled`=1")->resultset();
     foreach ($blocked as $tempban) {
         rcon(("sc_fw_ungag " . $row['authid']), $tempban['sid']);
     }
 
     if ($res) {
-        echo "<script>ShowBox('Player UnGagged', '" . $row['name'] . " (" . $row['authid'] . ") has been ungagged from SourceBans.', 'green', 'index.php?p=commslist$pagelink');</script>";
-        Log::add("m", "Player UnGagged", "$row[name] ($row[authid]) has been ungagged.");
+        \Sbpp\View\Toast::emit(
+            'success',
+            'Player UnGagged',
+            $row['name'] . ' (' . $row['authid'] . ') has been ungagged from SourceBans.',
+            "index.php?p=commslist$pagelink",
+        );
+        Log::add(LogType::Message, "Player UnGagged", "$row[name] ($row[authid]) has been ungagged. Reason: $unbanReason");
     } else {
-        echo "<script>ShowBox('Player NOT UnGagged', 'There was an error ungagging " . $row['name'] . "', 'red', 'index.php?p=commsist$pagelink', true);</script>";
+        // #1409: persistent toast (`duration_ms: 0`) on the severe-
+        // error "destructive action FAILED" branch. The ungag SQL
+        // didn't complete; the operator needs to read this before
+        // it disappears. Mirrors the sibling banlist NOT-* branches.
+        //
+        // Redirect is intentionally `null`: persistent + redirect
+        // are mutually exclusive (the chrome's `flushPendingToasts`
+        // would otherwise navigate ~1500ms after paint, tearing the
+        // toast down before the operator can read or dismiss it).
+        // The page handler continues rendering the commslist body
+        // after this branch (no `PageDie()`), so the operator stays
+        // on a valid surface; the toast persists until the user
+        // clicks the X button. See AGENTS.md "Server-side toast
+        // emission" → "Duration semantics" for the full contract.
+        \Sbpp\View\Toast::emit(
+            'error',
+            'Player NOT UnGagged',
+            'There was an error ungagging ' . $row['name'],
+            null,
+            0,
+        );
     }
 } else if (isset($_GET['a']) && $_GET['a'] == "unmute" && isset($_GET['id'])) {
     if ($_GET['key'] != $_SESSION['banlist_postkey']) {
         die("Possible hacking attempt (URL Key mismatch)");
     }
+    // #1301: see ungag branch above for rationale.
+    $unbanReasonRaw = trim((string) ($_GET['ureason'] ?? ''));
+    if ($unbanReasonRaw === '') {
+        \Sbpp\View\Toast::emit(
+            'error',
+            'Unblock Reason Required',
+            'You must supply a reason when unmuting a player.',
+            "index.php?p=commslist$pagelink",
+        );
+        PageDie();
+    }
     //we have a multiple unban asking
-    $bid = intval($_GET['id']);
-    $res = $GLOBALS['db']->Execute("SELECT a.aid, a.gid FROM `" . DB_PREFIX . "_comms` c INNER JOIN " . DB_PREFIX . "_admins a ON a.aid = c.aid WHERE bid = '" . $bid . "' AND c.type = 1;");
-    if (!$userbank->HasAccess(ADMIN_OWNER | ADMIN_UNBAN) && !($userbank->HasAccess(ADMIN_UNBAN_OWN_BANS) && $res->fields['aid'] == $userbank->GetAid()) && !($userbank->HasAccess(ADMIN_UNBAN_GROUP_BANS) && $res->fields['gid'] == $userbank->GetProperty('gid'))) {
+    $bid = (int) $_GET['id'];
+    $GLOBALS['PDO']->query("SELECT a.aid, a.gid FROM `:prefix_comms` c INNER JOIN `:prefix_admins` a ON a.aid = c.aid WHERE bid = :bid AND c.type = 1");
+    $GLOBALS['PDO']->bind(':bid', $bid);
+    $res = $GLOBALS['PDO']->single();
+    if (!$userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::Unban)) && !($userbank->HasAccess(WebPermission::UnbanOwnBans) && $res['aid'] == $userbank->GetAid()) && !($userbank->HasAccess(WebPermission::UnbanGroupBans) && $res['gid'] == $userbank->GetProperty('gid'))) {
         die("You don't have access to this");
     }
 
-    $row = $GLOBALS['db']->GetRow("SELECT b.authid, b.name, b.created, b.sid, UNIX_TIMESTAMP() as now
-										FROM " . DB_PREFIX . "_comms b
-										LEFT JOIN " . DB_PREFIX . "_servers s ON s.sid = b.sid
-										WHERE b.bid = ? AND b.RemoveType IS NULL AND b.type = 1 AND (b.length = '0' OR b.ends > UNIX_TIMESTAMP())", array(
-        $bid
-    ));
+    $GLOBALS['PDO']->query("SELECT b.authid, b.name, b.created, b.sid, UNIX_TIMESTAMP() as now
+										FROM `:prefix_comms` b
+										LEFT JOIN `:prefix_servers` s ON s.sid = b.sid
+										WHERE b.bid = :bid AND b.RemoveType IS NULL AND b.type = 1 AND (b.length = '0' OR b.ends > UNIX_TIMESTAMP())");
+    $GLOBALS['PDO']->bind(':bid', $bid);
+    $row = $GLOBALS['PDO']->single();
     if (empty($row) || !$row) {
-        echo "<script>ShowBox('Player Not UnGagged', 'The player was not unmuted, either already unmuted or not a valid block.', 'red', 'index.php?p=commslist$pagelink');</script>";
+        // Title says "UnGagged" — pre-#1403 copy-paste typo from the
+        // sister branch above (the message body correctly says
+        // "unmuted"). Preserved verbatim to keep this PR's scope to
+        // the mechanical ShowBox → Toast::emit lift; the title-vs-body
+        // mismatch is a separate UX bug.
+        \Sbpp\View\Toast::emit(
+            'error',
+            'Player Not UnGagged',
+            'The player was not unmuted, either already unmuted or not a valid block.',
+            "index.php?p=commslist$pagelink",
+        );
         PageDie();
     }
 
-    $unbanReason = htmlspecialchars(trim($_GET['ureason']));
-    $ins         = $GLOBALS['db']->Execute("UPDATE `" . DB_PREFIX . "_comms` SET
-										`RemovedBy` = ?,
-										`RemoveType` = 'U',
+    $unbanReason = htmlspecialchars($unbanReasonRaw);
+    $GLOBALS['PDO']->query("UPDATE `:prefix_comms` SET
+										`RemovedBy` = :removedby,
+										`RemoveType` = :rtype,
 										`RemovedOn` = UNIX_TIMESTAMP(),
-										`ureason` = ?
-										WHERE `bid` = ?;", array(
-        $userbank->GetAid(),
-        $unbanReason,
-        $bid
-    ));
+										`ureason` = :ureason
+										WHERE `bid` = :bid");
+    $GLOBALS['PDO']->bindMultiple([
+        ':removedby' => $userbank->GetAid(),
+        ':rtype'     => BanRemoval::Unbanned->value,
+        ':ureason'   => $unbanReason,
+        ':bid'       => $bid,
+    ]);
+    $GLOBALS['PDO']->execute();
 
-    $blocked = $GLOBALS['db']->GetAll("SELECT sid FROM `" . DB_PREFIX . "_servers` WHERE `enabled`=1");
+    $blocked = $GLOBALS['PDO']->query("SELECT sid FROM `:prefix_servers` WHERE `enabled`=1")->resultset();
     foreach ($blocked as $tempban) {
         rcon(("sc_fw_unmute " . $row['authid']), $tempban['sid']);
     }
 
     if ($res) {
-        echo "<script>ShowBox('Player UnMuted', '" . $row['name'] . " (" . $row['authid'] . ") has been unmuted from SourceBans.', 'green', 'index.php?p=commslist$pagelink');</script>";
-        Log::add("m", "Player UnMuted", "$row[name] ($row[authid]) has been unmuted.");
+        \Sbpp\View\Toast::emit(
+            'success',
+            'Player UnMuted',
+            $row['name'] . ' (' . $row['authid'] . ') has been unmuted from SourceBans.',
+            "index.php?p=commslist$pagelink",
+        );
+        Log::add(LogType::Message, "Player UnMuted", "$row[name] ($row[authid]) has been unmuted. Reason: $unbanReason");
     } else {
-        echo "<script>ShowBox('Player NOT UnGagged', 'There was an error unmuted " . $row['name'] . "', 'red', 'index.php?p=commsist$pagelink', true);</script>";
+        // Title says "UnGagged" + body says "unmuted" — pre-#1403
+        // copy-paste typo from the sister ungag branch. Preserved
+        // verbatim to keep this PR's scope to the mechanical
+        // ShowBox → Toast::emit lift; the title-vs-body mismatch and
+        // the original "?p=commsist" redirect typo (now corrected to
+        // "?p=commslist" since landing the user on a 404 made the
+        // toast pointless) are separate UX bugs worth a follow-up.
+        //
+        // #1409: persistent toast (`duration_ms: 0`) — same severe-
+        // error "destructive action FAILED" semantic as the sibling
+        // ungag NOT-* branch above and the banlist NOT-* branches.
+        // Redirect is intentionally `null` — see the ungag branch
+        // above for the rationale. AGENTS.md "Server-side toast
+        // emission" → "Duration semantics" carries the contract.
+        \Sbpp\View\Toast::emit(
+            'error',
+            'Player NOT UnGagged',
+            'There was an error unmuted ' . $row['name'],
+            null,
+            0,
+        );
     }
 } else if (isset($_GET['a']) && $_GET['a'] == "delete") {
     if ($_GET['key'] != $_SESSION['banlist_postkey']) {
         die("Possible hacking attempt (URL Key mismatch)");
     }
 
-    if (!$userbank->HasAccess(ADMIN_OWNER | ADMIN_DELETE_BAN)) {
-        echo "<script>ShowBox('Error', 'You do not have access to this.', 'red', 'index.php?p=commslist$pagelink');</script>";
+    if (!$userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::DeleteBan))) {
+        \Sbpp\View\Toast::emit(
+            'error',
+            'Error',
+            'You do not have access to this.',
+            "index.php?p=commslist$pagelink",
+        );
         PageDie();
     }
 
-    $bid = intval($_GET['id']);
+    $bid = (int) $_GET['id'];
 
-    $steam  = $GLOBALS['db']->GetRow("SELECT name, authid, ends, length, RemoveType, type, UNIX_TIMESTAMP() AS now
-									FROM " . DB_PREFIX . "_comms WHERE bid=?", array(
-        $bid
-    ));
+    $GLOBALS['PDO']->query("SELECT name, authid, ends, length, RemoveType, type, UNIX_TIMESTAMP() AS now
+									FROM `:prefix_comms` WHERE bid = :bid");
+    $GLOBALS['PDO']->bind(':bid', $bid);
+    $steam = $GLOBALS['PDO']->single();
     $end    = (int) $steam['ends'];
     $length = (int) $steam['length'];
     $now    = (int) $steam['now'];
@@ -182,28 +268,47 @@ if (isset($_GET['a']) && $_GET['a'] == "ungag" && isset($_GET['id'])) {
             break;
     }
 
-    $res = $GLOBALS['db']->Execute("DELETE FROM `" . DB_PREFIX . "_comms` WHERE `bid` = ?", array(
-        $bid
-    ));
+    $GLOBALS['PDO']->query("DELETE FROM `:prefix_comms` WHERE `bid` = :bid");
+    $GLOBALS['PDO']->bind(':bid', $bid);
+    $res = $GLOBALS['PDO']->execute();
 
     if (empty($steam['RemoveType']) && ($length == 0 || $end > $now)) {
-        $blocked = $GLOBALS['db']->GetAll("SELECT sid FROM `" . DB_PREFIX . "_servers` WHERE `enabled`=1");
+        $blocked = $GLOBALS['PDO']->query("SELECT sid FROM `:prefix_servers` WHERE `enabled`=1")->resultset();
         foreach ($blocked as $tempban) {
             rcon(($cmd . " " . $steam['authid']), $tempban['sid']);
         }
     }
 
     if ($res) {
-        echo "<script>ShowBox('Block Deleted', 'The block for \'" . $steam['name'] . "\' (" . $steam['authid'] . ") has been deleted from SourceBans', 'green', 'index.php?p=commslist$pagelink');</script>";
-        Log::add("m", "Block Deleted", "Block $steam[name] ($steam[authid]) has been deleted.");
+        \Sbpp\View\Toast::emit(
+            'success',
+            'Block Deleted',
+            "The block for '" . $steam['name'] . "' (" . $steam['authid'] . ') has been deleted from SourceBans',
+            "index.php?p=commslist$pagelink",
+        );
+        Log::add(LogType::Message, "Block Deleted", "Block $steam[name] ($steam[authid]) has been deleted.");
     } else {
-        echo "<script>ShowBox('Ban NOT Deleted', 'The ban for \'" . $steam['name'] . "\' had an error while being removed.', 'red', 'index.php?p=commslist$pagelink', true);</script>";
+        // #1409: persistent toast (`duration_ms: 0`) — same severe-
+        // error "destructive action FAILED" semantic as the sibling
+        // banlist "Ban NOT Deleted" branch. The DELETE didn't
+        // complete; the operator needs to see this and acknowledge
+        // before it disappears. Redirect is intentionally `null` —
+        // see the sibling ungag branch above for the rationale.
+        // AGENTS.md "Server-side toast emission" → "Duration
+        // semantics" carries the contract.
+        \Sbpp\View\Toast::emit(
+            'error',
+            'Ban NOT Deleted',
+            "The ban for '" . $steam['name'] . "' had an error while being removed.",
+            null,
+            0,
+        );
     }
 }
 
 // LIMIT для SQL запроса - по номеру страницы и числу банов на страницу
-$BansStart = intval(($page - 1) * $BansPerPage);
-$BansEnd   = intval($BansStart + $BansPerPage);
+$BansStart = (int) (($page - 1) * $BansPerPage);
+$BansEnd   = (int) ($BansStart + $BansPerPage);
 
 // hide inactive bans feature
 if (isset($_GET["hideinactive"]) && $_GET["hideinactive"] == "true") { // hide
@@ -213,21 +318,69 @@ if (isset($_GET["hideinactive"]) && $_GET["hideinactive"] == "true") { // hide
     unset($_SESSION["hideinactive"]);
     //ShowBox('Show inactive bans', 'Inactive bans will be shown in the banlist.', 'green', 'index.php?p=banlist', true);
 }
-if (isset($_SESSION["hideinactive"])) {
+
+// #1274: filter chip URL state. The chip strip in page_comms.tpl
+// submits ?type=<mute|gag|silence> for type chips and ?state=active
+// for the Active chip; both have to compose with the legacy
+// ?searchText / ?advSearch / ?advType paths AND with the existing
+// session-based "hide inactive" toggle. The lifecycle:
+//
+//   1. Sanitise chip params here (validated against a small allowlist
+//      so a stray ?type=DROP TABLE never reaches the SQL layer).
+//   2. Treat `state=active` and the session-based hideinactive flag
+//      as the SAME effect — both narrow to "active rows only" via
+//      the predicate below. The chip's `aria-pressed` and the
+//      toggle button's `aria-pressed` both light up when EITHER
+//      surface is on (see page_comms.tpl).
+//   3. The Active predicate is single-sourced as the local
+//      $activePredicateCo / $activePredicateBare strings: identical
+//      semantics, only the column alias differs. After PruneComms()
+//      runs at the top of this file, every length-bounded expired
+//      row already has RemoveType='E', so the second clause is a
+//      belt-and-suspenders guard against a race window where the
+//      prune hasn't yet swept the latest expired row.
+$chipType  = (string)($_GET['type']  ?? '');
+$chipType  = in_array($chipType, ['mute', 'gag', 'silence'], true) ? $chipType : '';
+$chipStateActive = (((string)($_GET['state'] ?? '')) === 'active');
+
+$activePredicateCo   = '(CO.RemoveType IS NULL AND (CO.length = 0 OR CO.ends > UNIX_TIMESTAMP()))';
+$activePredicateBare = '(RemoveType IS NULL AND (length = 0 OR ends > UNIX_TIMESTAMP()))';
+
+$isActiveOnly = isset($_SESSION["hideinactive"]) || $chipStateActive;
+if ($isActiveOnly) {
     $hidetext      = "Show";
-    $hideinactive  = " AND RemoveType IS NULL";
-    $hideinactiven = " WHERE RemoveType IS NULL";
+    $hideinactive  = " AND " . $activePredicateCo;
+    $hideinactiven = " WHERE " . $activePredicateBare;
 } else {
     $hidetext      = "Hide";
     $hideinactive  = "";
     $hideinactiven = "";
 }
 
+// Chip TYPE filter — additional WHERE fragment + bind. `:prefix_comms.type`
+// is `1=mute, 2=gag, 3=silence` per the existing render logic at
+// ~line 750 (`$typeLabel` switch). `_Co` is for queries that alias
+// the table as CO; `_Bare` is for the count query that uses the
+// unaliased table name.
+$typeMap            = ['mute' => 1, 'gag' => 2, 'silence' => 3];
+$chipTypeWhereCo    = '';
+$chipTypeWhereBare  = '';
+$chipTypeBind       = [];
+if ($chipType !== '') {
+    $chipTypeWhereCo   = ' AND CO.type = ?';
+    $chipTypeWhereBare = ' AND type = ?';
+    $chipTypeBind      = [$typeMap[$chipType]];
+}
+
 if (isset($_GET['searchText'])) {
-    $searchText = trim($_GET['searchText']);
+    $searchText = trim((string) $_GET['searchText']);
+
+    // #1130: when the input parses as any Steam-ID format, match `authid`
+    // via REGEXP so both STEAM_0:Y:Z and STEAM_1:Y:Z stored variants hit
+    // (the SourceMod plugin can write either depending on the game).
+    $authidPattern = SteamID::toSearchPattern($searchText);
 
     try {
-        SteamID::init();
         if (SteamID::isValidID($searchText)) {
             $conversionResult = SteamID::toSteam2($searchText);
 
@@ -239,60 +392,92 @@ if (isset($_GET['searchText'])) {
 
     $search = "%{$searchText}%";
 
-    $res = $GLOBALS['db']->Execute("SELECT bid ban_id, CO.type, CO.authid, CO.name player_name, created ban_created, ends ban_ends, length ban_length, reason ban_reason, CO.ureason unban_reason, CO.aid, AD.gid AS gid, adminIp, CO.sid ban_server, RemovedOn, RemovedBy, RemoveType row_type,
+    if ($authidPattern !== null) {
+        $authidClause = "CO.authid REGEXP ?";
+        $authidParam  = $authidPattern;
+    } else {
+        $authidClause = "CO.authid LIKE ?";
+        $authidParam  = $search;
+    }
+
+    // #1274: wrap the OR-search clauses in parens before appending
+    // any AND-predicate (hideinactive, chip type). Without the parens
+    // SQL precedence makes `WHERE A OR B OR C AND D` parse as
+    // `WHERE A OR B OR (C AND D)` — the AND only restricts the last
+    // OR term, so a chip-type filter would silently let inactive or
+    // wrong-type rows leak through whenever they matched authid or
+    // name. The parens lock the AND-predicates onto the entire OR
+    // group.
+    $res = $GLOBALS['PDO']->query("SELECT bid ban_id, CO.type, CO.authid, CO.name player_name, created ban_created, ends ban_ends, length ban_length, reason ban_reason, CO.ureason unban_reason, CO.aid, AD.gid AS gid, adminIp, CO.sid ban_server, RemovedOn, RemovedBy, RemoveType row_type,
 		SE.ip server_ip, AD.user admin_name, MO.icon as mod_icon,
 		CAST(MID(CO.authid, 9, 1) AS UNSIGNED) + CAST('76561197960265728' AS UNSIGNED) + CAST(MID(CO.authid, 11, 10) * 2 AS UNSIGNED) AS community_id,
-		(SELECT count(*) FROM " . DB_PREFIX . "_comms as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 1)) as mute_count,
-		(SELECT count(*) FROM " . DB_PREFIX . "_comms as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 2)) as gag_count,
+		(SELECT count(*) FROM `:prefix_comms` as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 1)) as mute_count,
+		(SELECT count(*) FROM `:prefix_comms` as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 2)) as gag_count,
 		UNIX_TIMESTAMP() as c_time
-		FROM " . DB_PREFIX . "_comms AS CO FORCE INDEX (created)
-		LEFT JOIN " . DB_PREFIX . "_servers AS SE ON SE.sid = CO.sid
-		LEFT JOIN " . DB_PREFIX . "_mods AS MO on SE.modid = MO.mid
-		LEFT JOIN " . DB_PREFIX . "_admins AS AD ON CO.aid = AD.aid
-      	WHERE CO.authid LIKE ? or CO.name LIKE ? or CO.reason LIKE ?" . $hideinactive . "
-   		ORDER BY CO.created DESC LIMIT ?,?", array(
+		FROM `:prefix_comms` AS CO FORCE INDEX (created)
+		LEFT JOIN `:prefix_servers` AS SE ON SE.sid = CO.sid
+		LEFT JOIN `:prefix_mods` AS MO on SE.modid = MO.mid
+		LEFT JOIN `:prefix_admins` AS AD ON CO.aid = AD.aid
+      	WHERE (" . $authidClause . " or CO.name LIKE ? or CO.reason LIKE ?)" . $hideinactive . $chipTypeWhereCo . "
+   		ORDER BY CO.created DESC LIMIT ?,?")->resultset(array_merge([
+        $authidParam,
         $search,
         $search,
-        $search,
-        intval($BansStart),
-        intval($BansPerPage)
-    ));
+    ], $chipTypeBind, [
+        (int) $BansStart,
+        (int) $BansPerPage
+    ]));
 
 
-    $res_count  = $GLOBALS['db']->Execute("SELECT count(CO.bid) FROM " . DB_PREFIX . "_comms AS CO WHERE CO.authid LIKE ? OR CO.name LIKE ? OR CO.reason LIKE ?" . $hideinactive, array(
+    $res_count  = $GLOBALS['PDO']->query("SELECT count(CO.bid) AS cnt FROM `:prefix_comms` AS CO WHERE (" . $authidClause . " OR CO.name LIKE ? OR CO.reason LIKE ?)" . $hideinactive . $chipTypeWhereCo)->resultset(array_merge([
+        $authidParam,
         $search,
         $search,
-        $search
-    ));
-    $searchlink = "&searchText=" . $_GET["searchText"];
+    ], $chipTypeBind));
+    $searchlink = "&searchText=" . urlencode($_GET["searchText"]);
 } elseif (!isset($_GET['advSearch'])) {
-    $res = $GLOBALS['db']->Execute("SELECT bid ban_id, CO.type, CO.authid, CO.name player_name, created ban_created, ends ban_ends, length ban_length, reason ban_reason, CO.ureason unban_reason, CO.aid, AD.gid AS gid, adminIp, CO.sid ban_server, RemovedOn, RemovedBy, RemoveType row_type,
+    // #1274: this branch has no upper-level WHERE; if hideinactive
+    // already opened one ($hideinactiven = " WHERE …") we append the
+    // chip type filter as " AND CO.type = ?", otherwise the chip
+    // opens the WHERE itself. Mirrors the $publicFilterAnd /
+    // $publicFilterWheren shape in page.banlist.php.
+    if ($hideinactiven !== '') {
+        $branchWhereSuffix = $hideinactiven . $chipTypeWhereCo;
+        $branchCountSuffix = $hideinactiven . $chipTypeWhereBare;
+    } elseif ($chipType !== '') {
+        $branchWhereSuffix = ' WHERE CO.type = ?';
+        $branchCountSuffix = ' WHERE type = ?';
+    } else {
+        $branchWhereSuffix = '';
+        $branchCountSuffix = '';
+    }
+
+    $res = $GLOBALS['PDO']->query("SELECT bid ban_id, CO.type, CO.authid, CO.name player_name, created ban_created, ends ban_ends, length ban_length, reason ban_reason, CO.ureason unban_reason, CO.aid, AD.gid AS gid, adminIp, CO.sid ban_server, RemovedOn, RemovedBy, RemoveType row_type,
 		SE.ip server_ip, AD.user admin_name, MO.icon as mod_icon,
 		CAST(MID(CO.authid, 9, 1) AS UNSIGNED) + CAST('76561197960265728' AS UNSIGNED) + CAST(MID(CO.authid, 11, 10) * 2 AS UNSIGNED) AS community_id,
-		(SELECT count(*) FROM " . DB_PREFIX . "_comms as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 1)) as mute_count,
-		(SELECT count(*) FROM " . DB_PREFIX . "_comms as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 2)) as gag_count,
+		(SELECT count(*) FROM `:prefix_comms` as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 1)) as mute_count,
+		(SELECT count(*) FROM `:prefix_comms` as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 2)) as gag_count,
 		UNIX_TIMESTAMP() as c_time
-		FROM " . DB_PREFIX . "_comms AS CO FORCE INDEX (created)
-		LEFT JOIN " . DB_PREFIX . "_servers AS SE ON SE.sid = CO.sid
-		LEFT JOIN " . DB_PREFIX . "_mods AS MO on SE.modid = MO.mid
-		LEFT JOIN " . DB_PREFIX . "_admins AS AD ON CO.aid = AD.aid
-		" . $hideinactiven . "
+		FROM `:prefix_comms` AS CO FORCE INDEX (created)
+		LEFT JOIN `:prefix_servers` AS SE ON SE.sid = CO.sid
+		LEFT JOIN `:prefix_mods` AS MO on SE.modid = MO.mid
+		LEFT JOIN `:prefix_admins` AS AD ON CO.aid = AD.aid
+		" . $branchWhereSuffix . "
 		ORDER BY created DESC
-		LIMIT ?,?", array(
-        intval($BansStart),
-        intval($BansPerPage)
-    ));
+		LIMIT ?,?")->resultset(array_merge($chipTypeBind, [
+        (int) $BansStart,
+        (int) $BansPerPage
+    ]));
 
-    $res_count  = $GLOBALS['db']->Execute("SELECT count(bid) FROM " . DB_PREFIX . "_comms" . $hideinactiven);
+    $res_count  = $GLOBALS['PDO']->query("SELECT count(bid) AS cnt FROM `:prefix_comms`" . $branchCountSuffix)->resultset($chipTypeBind);
     $searchlink = "";
 }
 
 $advcrit = [];
 if (isset($_GET['advSearch'])) {
-    $value = trim($_GET['advSearch']);
+    $value = trim((string) $_GET['advSearch']);
 
     try {
-        SteamID::init();
         if (SteamID::isValidID($value)) {
             $conversionResult = SteamID::toSteam2($value);
 
@@ -306,43 +491,38 @@ if (isset($_GET['advSearch'])) {
     switch ($type) {
         case "name":
             $where   = "WHERE CO.name LIKE ?";
-            $advcrit = array(
-                "%$value%"
-            );
+            $advcrit = ["%$value%"];
             break;
         case "banid":
             $where   = "WHERE CO.bid = ?";
-            $advcrit = array(
-                $value
-            );
+            $advcrit = [$value];
             break;
         case "steamid":
-            $where   = "WHERE CO.authid = ?";
-            $advcrit = array(
-                $value
-            );
+            // #1130: match both STEAM_0:Y:Z and STEAM_1:Y:Z stored variants;
+            // see SteamID::toSearchPattern() for rationale.
+            $authidPattern = SteamID::toSearchPattern($value);
+            if ($authidPattern !== null) {
+                $where   = "WHERE CO.authid REGEXP ?";
+                $advcrit = [$authidPattern];
+            } else {
+                $where   = "WHERE CO.authid = ?";
+                $advcrit = [$value];
+            }
             break;
         case "steam":
             $where   = "WHERE CO.authid LIKE ?";
-            $advcrit = array(
-                "%$value%"
-            );
+            $advcrit = ["%$value%"];
             break;
         case "reason":
             $where   = "WHERE CO.reason LIKE ?";
-            $advcrit = array(
-                "%$value%"
-            );
+            $advcrit = ["%$value%"];
             break;
         case "date":
             $date    = explode(",", $value);
             $time    = mktime(0, 0, 0, (int)$date[1], (int)$date[0], (int)$date[2]);
             $time2   = mktime(23, 59, 59, (int)$date[1], (int)$date[0], (int)$date[2]);
             $where   = "WHERE CO.created > ? AND CO.created < ?";
-            $advcrit = array(
-                $time,
-                $time2
-            );
+            $advcrit = [$time, $time2];
             break;
         case "length":
             $len         = explode(",", $value);
@@ -367,15 +547,11 @@ if (isset($_GET['advSearch'])) {
                     break;
             }
             $where .= " ?";
-            $advcrit = array(
-                $length
-            );
+            $advcrit = [$length];
             break;
         case "btype":
             $where   = "WHERE CO.type = ?";
-            $advcrit = array(
-                $value
-            );
+            $advcrit = [$value];
             break;
         case "admin":
             if (Config::getBool('banlist.hideadminname') && !$userbank->is_admin()) {
@@ -383,29 +559,21 @@ if (isset($_GET['advSearch'])) {
                 $advcrit = [];
             } else {
                 $where   = "WHERE CO.aid=?";
-                $advcrit = array(
-                    $value
-                );
+                $advcrit = [$value];
             }
             break;
         case "where_banned":
             $where   = "WHERE CO.sid=?";
-            $advcrit = array(
-                $value
-            );
+            $advcrit = [$value];
             break;
         case "bid":
             $where   = "WHERE CO.bid = ?";
-            $advcrit = array(
-                $value
-            );
+            $advcrit = [$value];
             break;
         case "comment":
             if ($userbank->is_admin()) {
                 $where   = "WHERE CM.type ='C' AND CM.commenttxt LIKE ?";
-                $advcrit = array(
-                    "%$value%"
-                );
+                $advcrit = ["%$value%"];
             } else {
                 $where   = "";
                 $advcrit = [];
@@ -419,49 +587,65 @@ if (isset($_GET['advSearch'])) {
             break;
     }
 
-    $res = $GLOBALS['db']->Execute("SELECT CO.bid ban_id, CO.type, CO.authid, CO.name player_name, created ban_created, ends ban_ends, length ban_length, reason ban_reason, CO.ureason unban_reason, CO.aid, AD.gid AS gid, adminIp, CO.sid ban_server, RemovedOn, RemovedBy, RemoveType row_type,
+    // #1274: chip type composes onto the advSearch WHERE. If $where
+    // is empty (advType resolved to a no-op) AND hideinactive is on,
+    // promote $hideinactive to its WHERE form so the trailing chip
+    // predicate can append cleanly. Otherwise we may be left with
+    // " AND CO.type = ?" as the only WHERE clause, which is invalid
+    // SQL ("AND" with no leading WHERE). Mirrors the
+    // `if (empty($where) && hide_inactive) $hideinactive = $hideinactiven`
+    // shape page.banlist.php uses for the same composition.
+    if (empty($where) && $hideinactive === '' && $chipType !== '') {
+        $advChipType = ' WHERE CO.type = ?';
+    } else {
+        $advChipType = $chipTypeWhereCo;
+    }
+
+    $res = $GLOBALS['PDO']->query("SELECT CO.bid ban_id, CO.type, CO.authid, CO.name player_name, created ban_created, ends ban_ends, length ban_length, reason ban_reason, CO.ureason unban_reason, CO.aid, AD.gid AS gid, adminIp, CO.sid ban_server, RemovedOn, RemovedBy, RemoveType row_type,
 			SE.ip server_ip, AD.user admin_name, MO.icon as mod_icon,
 			CAST(MID(CO.authid, 9, 1) AS UNSIGNED) + CAST('76561197960265728' AS UNSIGNED) + CAST(MID(CO.authid, 11, 10) * 2 AS UNSIGNED) AS community_id,
-			(SELECT count(*) FROM " . DB_PREFIX . "_comms as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 1)) as mute_count,
-			(SELECT count(*) FROM " . DB_PREFIX . "_comms as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 2)) as gag_count,
+			(SELECT count(*) FROM `:prefix_comms` as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 1)) as mute_count,
+			(SELECT count(*) FROM `:prefix_comms` as BH WHERE (BH.authid = CO.authid AND BH.authid != '' AND BH.authid IS NOT NULL AND BH.type = 2)) as gag_count,
 			UNIX_TIMESTAMP() as c_time
-			FROM " . DB_PREFIX . "_comms AS CO FORCE INDEX (created)
-			LEFT JOIN " . DB_PREFIX . "_servers AS SE ON SE.sid = CO.sid
-			LEFT JOIN " . DB_PREFIX . "_mods AS MO on SE.modid = MO.mid
-			LEFT JOIN " . DB_PREFIX . "_admins AS AD ON CO.aid = AD.aid
-  			" . ($type == "comment" && $userbank->is_admin() ? "LEFT JOIN " . DB_PREFIX . "_comments AS CM ON CO.bid = CM.bid" : "") . "
-      " . $where . $hideinactive . "
+			FROM `:prefix_comms` AS CO FORCE INDEX (created)
+			LEFT JOIN `:prefix_servers` AS SE ON SE.sid = CO.sid
+			LEFT JOIN `:prefix_mods` AS MO on SE.modid = MO.mid
+			LEFT JOIN `:prefix_admins` AS AD ON CO.aid = AD.aid
+  			" . ($type == "comment" && $userbank->is_admin() ? "LEFT JOIN `:prefix_comments` AS CM ON CO.bid = CM.bid" : "") . "
+      " . $where . $hideinactive . $advChipType . "
    ORDER BY CO.created DESC
-   LIMIT ?,?", array_merge($advcrit, array(
-        intval($BansStart),
-        intval($BansPerPage)
-    )));
+   LIMIT ?,?")->resultset(array_merge($advcrit, $chipTypeBind, [
+        (int) $BansStart,
+        (int) $BansPerPage
+    ]));
 
-    $res_count  = $GLOBALS['db']->Execute("SELECT count(CO.bid) FROM " . DB_PREFIX . "_comms AS CO
-										  " . ($type == "comment" && $userbank->is_admin() ? "LEFT JOIN " . DB_PREFIX . "_comments AS CM ON CO.bid = CM.bid" : "") . " " . $where . $hideinactive, $advcrit);
-    $searchlink = "&advSearch=" . $_GET['advSearch'] . "&advType=" . $_GET['advType'];
+    $res_count  = $GLOBALS['PDO']->query("SELECT count(CO.bid) AS cnt FROM `:prefix_comms` AS CO
+										  " . ($type == "comment" && $userbank->is_admin() ? "LEFT JOIN `:prefix_comments` AS CM ON CO.bid = CM.bid" : "") . " " . $where . $hideinactive . $advChipType)->resultset(array_merge($advcrit, $chipTypeBind));
+    $searchlink = "&advSearch=" . urlencode($_GET['advSearch']) . "&advType=" . urlencode($_GET['advType']);
 }
 
-$BanCount = $res_count->fields[0];
+$BanCount = isset($res_count[0]['cnt']) ? (int) $res_count[0]['cnt'] : 0;
 if ($BansEnd > $BanCount) {
     $BansEnd = $BanCount;
 }
-if (!$res) {
-    echo "No Blocks Found.";
-    PageDie();
-}
+// Mirrors page.banlist.php: the redesigned page_comms.tpl renders its
+// own "No comm blocks match those filters." empty state inside the
+// table, so we let the template handle the empty case rather than
+// short-circuiting with PageDie() and dropping the marquee chrome.
+// PDO error mode is EXCEPTION, so a real SQL failure throws before
+// reaching this point.
 
 $view_comments = false;
 $bans          = [];
-while (!$res->EOF) {
+foreach ($res as $row) {
     $data = [];
 
-    $data['ban_id'] = $res->fields['ban_id'];
-    $data['type']   = $res->fields['type'];
-    $data['c_time'] = $res->fields['c_time'];
+    $data['ban_id'] = $row['ban_id'];
+    $data['type']   = $row['type'];
+    $data['c_time'] = $row['c_time'];
 
-    $mute_count    = (int) $res->fields['mute_count'];
-    $gag_count     = (int) $res->fields['gag_count'];
+    $mute_count    = (int) $row['mute_count'];
+    $gag_count     = (int) $row['gag_count'];
     $history_count = $mute_count + $gag_count;
 
     $delimiter = "";
@@ -480,10 +664,10 @@ while (!$res->EOF) {
             break;
     }
 
-    $data['ban_date']    = Config::time($res->fields['ban_created']);
+    $data['ban_date']    = Config::time($row['ban_created']);
 
     // Fix #1008 - bug: Player Names Contain Unwanted Non-Standard Characters
-    $raw_name = $res->fields['player_name'];
+    $raw_name = $row['player_name'];
     $cleaned_name = mb_convert_encoding($raw_name, 'UTF-8', 'UTF-8');
     $unwanted_sequences = ["\xF3\xA0\x80\xA1"];
     foreach ($unwanted_sequences as $sequence) {
@@ -492,12 +676,12 @@ while (!$res->EOF) {
     $cleaned_name = trim($cleaned_name);
 
     $data['player']      = addslashes($cleaned_name);
-    $data['steamid']     = $res->fields['authid'];
+    $data['steamid']     = $row['authid'];
     // Fix #906 - Bad SteamID Format broke the page view, so give them an null SteamID.
     if (!\SteamID\SteamID::isValidID($data['steamid'])) {
 		$data['steamid'] = 'STEAM_0:0:00000000';
 	}
-    $data['communityid'] = $res->fields['community_id'];
+    $data['communityid'] = $row['community_id'];
     $steam2id            = $data['steamid'];
     $steam3parts         = explode(':', $steam2id);
     $data['steamid3']    = \SteamID\SteamID::toSteam3($data['steamid']);
@@ -505,14 +689,17 @@ while (!$res->EOF) {
     if (Config::getBool('banlist.hideadminname') && !$userbank->is_admin()) {
         $data['admin'] = false;
     } else {
-        $data['admin'] = stripslashes($res->fields['admin_name']);
+        // Same LEFT JOIN nullability as page.banlist.php:773 — see
+        // the matching comment there for the rationale (deleted-
+        // admin scenario, #1273 null-into-scalar discipline).
+        $data['admin'] = stripslashes((string) $row['admin_name']);
     }
-    $data['reason'] = stripslashes($res->fields['ban_reason']);
+    $data['reason'] = stripslashes($row['ban_reason']);
 
-    if ($res->fields['ban_length'] > 0) {
-        $data['ban_length'] = SecondsToString(intval($res->fields['ban_length']));
-        $data['expires']    = Config::time($res->fields['ban_ends']);
-    } else if ($res->fields['ban_length'] == 0) {
+    if ($row['ban_length'] > 0) {
+        $data['ban_length'] = SecondsToString((int) $row['ban_length']);
+        $data['expires']    = Config::time($row['ban_ends']);
+    } else if ($row['ban_length'] == 0) {
         $data['ban_length'] = 'Permanent';
         $data['expires']    = 'never';
     } else {
@@ -521,25 +708,26 @@ while (!$res->EOF) {
     }
 
     // Что за тип разбана - D? Я такой не видел, но оставлю так и быть.. for feature use...
-    if ($res->fields['row_type'] == 'D' || $res->fields['row_type'] == 'U' || $res->fields['row_type'] == 'E' || ($res->fields['ban_length'] && $res->fields['ban_ends'] < $data['c_time'])) {
+    $rowRemoval = BanRemoval::tryFrom((string) ($row['row_type'] ?? ''));
+    if ($rowRemoval !== null || ($row['ban_length'] && $row['ban_ends'] < $data['c_time'])) {
         $data['unbanned'] = true;
         $data['class']    = "listtable_1_unbanned";
 
-        if ($res->fields['row_type'] == "D") {
-            $data['ub_reason'] = "(Deleted)";
-        } elseif ($res->fields['row_type'] == "U") {
-            $data['ub_reason'] = "(Unbanned)";
-        } else {
-            $data['ub_reason'] = "(Expired)";
-        }
+        $data['ub_reason'] = match ($rowRemoval) {
+            BanRemoval::Deleted  => "(Deleted)",
+            BanRemoval::Unbanned => "(Unbanned)",
+            default              => "(Expired)",
+        };
 
-        if (isset($res->fields['unban_reason']))
-            $data['ureason'] = stripslashes($res->fields['unban_reason']);
+        if (isset($row['unban_reason']))
+            $data['ureason'] = stripslashes($row['unban_reason']);
 
-        $removedby         = $GLOBALS['db']->GetRow("SELECT user FROM `" . DB_PREFIX . "_admins` WHERE aid = '" . $res->fields['RemovedBy'] . "'");
+        $GLOBALS['PDO']->query("SELECT user FROM `:prefix_admins` WHERE aid = :aid");
+        $GLOBALS['PDO']->bind(':aid', $row['RemovedBy']);
+        $removedby         = $GLOBALS['PDO']->single();
         $data['removedby'] = "";
-        if (isset($removedby[0]) && $data['admin']) {
-            $data['removedby'] = $removedby[0];
+        if (!empty($removedby['user']) && $data['admin']) {
+            $data['removedby'] = $removedby['user'];
         }
     } else if ($data['ban_length'] == 'Permanent') {
         $data['class'] = "listtable_1_permanent";
@@ -549,16 +737,31 @@ while (!$res->EOF) {
         $data['ub_reason'] = "";
     }
 
-    $data['layer_id'] = 'layer_' . $res->fields['ban_id'];
-    // Запрос текущего статуса игрока для рисования ссылки на мьют или гаг
-    $alrdybnd         = $GLOBALS['db']->Execute("SELECT count(bid) as count FROM `" . DB_PREFIX . "_comms` WHERE authid = '" . $data['steamid'] . "' AND RemovedBy IS NULL AND type = '" . $data['type'] . "' AND (length = 0 OR ends > UNIX_TIMESTAMP());");
-    if ($alrdybnd->fields['count'] == 0) {
+    $data['layer_id'] = 'layer_' . $row['ban_id'];
+    // Запрос текущего статуса игрока для рисования ссылки на мьют или гаг.
+    // Mirror of the banlist's `has_active_sibling` shape — see
+    // `web/pages/page.banlist.php` for the rationale. The Re-mute /
+    // Re-gag affordance must hide when the player already has an
+    // active block of the same type (the duplicate-check in
+    // `comms.add` would 4xx as `already_blocked`).
+    $GLOBALS['PDO']->query("SELECT count(bid) as count FROM `:prefix_comms` WHERE authid = :authid AND RemovedBy IS NULL AND type = :type AND (length = 0 OR ends > UNIX_TIMESTAMP())");
+    $GLOBALS['PDO']->bindMultiple([
+        ':authid' => $data['steamid'],
+        ':type'   => $data['type'],
+    ]);
+    $alrdybnd         = $GLOBALS['PDO']->single();
+    $hasActiveSibling = (int) $alrdybnd['count'] > 0;
+    $data['has_active_sibling'] = $hasActiveSibling;
+    if (!$hasActiveSibling) {
+        // #1275 — admin-comms is single-section Pattern A; the legacy
+        // `#^0` fragment targeted the old page-toc add-block anchor
+        // (long since dead). Drop it.
         switch ($data['type']) {
             case 1:
-                $data['reban_link'] = CreateLinkR('<i class="fas fa-redo fa-lg"></i> ReMute', "index.php?p=admin&c=comms" . $pagelink . "&rebanid=" . $res->fields['ban_id'] . "&key=" . $_SESSION['banlist_postkey'] . "#^0");
+                $data['reban_link'] = CreateLinkR('<i class="fas fa-redo fa-lg"></i> ReMute', "index.php?p=admin&c=comms" . $pagelink . "&rebanid=" . $row['ban_id'] . "&key=" . $_SESSION['banlist_postkey']);
                 break;
             case 2:
-                $data['reban_link'] = CreateLinkR('<i class="fas fa-redo fa-lg"></i> ReGag', "index.php?p=admin&c=comms" . $pagelink . "&rebanid=" . $res->fields['ban_id'] . "&key=" . $_SESSION['banlist_postkey'] . "#^0");
+                $data['reban_link'] = CreateLinkR('<i class="fas fa-redo fa-lg"></i> ReGag', "index.php?p=admin&c=comms" . $pagelink . "&rebanid=" . $row['ban_id'] . "&key=" . $_SESSION['banlist_postkey']);
                 break;
             default:
                 break;
@@ -568,33 +771,29 @@ while (!$res->EOF) {
     }
 
 
-    $data['edit_link'] = CreateLinkR('<i class="fas fa-edit fa-lg"></i> Edit Details', "index.php?p=admin&c=comms&o=edit" . $pagelink . "&id=" . $res->fields['ban_id'] . "&key=" . $_SESSION['banlist_postkey']);
+    $data['edit_link'] = CreateLinkR('<i class="fas fa-edit fa-lg"></i> Edit Details', "index.php?p=admin&c=comms&o=edit" . $pagelink . "&id=" . $row['ban_id'] . "&key=" . $_SESSION['banlist_postkey']);
 
-    switch ($data['type']) {
-        case 2:
-            $data['unban_link'] = CreateLinkR('<i class="fas fa-undo fa-lg"></i> UnGag', "#", "", "_self", false, "UnGag('" . $res->fields['ban_id'] . "', '" . $_SESSION['banlist_postkey'] . "', '" . $pagelink . "', '" . $data['player'] . "', 1);return false;");
-            break;
-        case 1:
-            $data['unban_link'] = CreateLinkR('<i class="fas fa-undo fa-lg"></i> UnMute', "#", "", "_self", false, "UnMute('" . $res->fields['ban_id'] . "', '" . $_SESSION['banlist_postkey'] . "', '" . $pagelink . "', '" . $data['player'] . "', 1);return false;");
-            break;
-        default:
-            break;
-    }
+    // #1404 — the `unban_link` (UnGag/UnMute switch arms) and
+    // `delete_link` fields were `CreateLinkR`-built `UnGag` / `UnMute`
+    // / `RemoveBlock` `<a onclick=…>` blobs; the helpers were deleted
+    // with `sourcebans.js` at #1123 D1 and no v2.0+ template ever
+    // consumed the fields. Modern unmute / delete affordances live on
+    // the `.row-actions` cell in `page_comms.tpl`
+    // (`data-action="comms-unblock"` / `data-action="comms-delete"`).
+    // Pinned by `DeadJsCallSitesTest`.
 
-    $data['delete_link'] = CreateLinkR('<i class="fas fa-trash fa-lg"></i> Delete Block', "#", "", "_self", false, "RemoveBlock('" . $res->fields['ban_id'] . "', '" . $_SESSION['banlist_postkey'] . "', '" . $pagelink . "', '" . $data['player'] . "', 0);return false;");
+    $data['server_id'] = $row['ban_server'];
 
-    $data['server_id'] = $res->fields['ban_server'];
-
-    if (empty($res->fields['mod_icon'])) {
+    if (empty($row['mod_icon'])) {
         $modicon = "web.png";
     } else {
-        $modicon = $res->fields['mod_icon'];
+        $modicon = $row['mod_icon'];
     }
 
     $data['mod_icon'] = '<img src="images/games/' . $modicon . '" alt="MOD" border="0" align="absmiddle" />&nbsp;' . $data['type_icon'];
 
     if ($history_count > 1) {
-        $data['prevoff_link'] = $history_count . " " . CreateLinkR("&nbsp;(search)", "index.php?p=commslist&searchText=" . $data['steamid'] . "&Submit");
+        $data['prevoff_link'] = $history_count . " " . CreateLinkR("&nbsp;(search)", "index.php?p=commslist&searchText=" . urlencode($data['steamid']) . "&Submit");
     } else {
         $data['prevoff_link'] = "No previous blocks";
     }
@@ -611,48 +810,61 @@ while (!$res->EOF) {
         $gags = $gag_count . '<i class="fas fa-comment-slash fa-lg"></i>';
     }
 
-    $data['server_id'] = $res->fields['ban_server'];
+    $data['server_id'] = $row['ban_server'];
 
     //COMMENT STUFF
     //-----------------------------------
     if (Config::getBool('config.enablepubliccomments') || $userbank->is_admin()) {
         $view_comments = true;
-        $commentres    = $GLOBALS['db']->Execute("SELECT cid, aid, commenttxt, added, edittime,
-											(SELECT user FROM `" . DB_PREFIX . "_admins` WHERE aid = C.aid) AS comname,
-											(SELECT user FROM `" . DB_PREFIX . "_admins` WHERE aid = C.editaid) AS editname
-											FROM `" . DB_PREFIX . "_comments` AS C
-											WHERE C.type = 'C' AND bid = '" . $data['ban_id'] . "' ORDER BY added desc");
+        // #1500: comment author/editor are admin usernames. Null them at the
+        // data layer for public viewers when banlist.hideadminname is on, so a
+        // third-party theme that renders the name directly can't re-leak it
+        // (parity with the focal admin-name gate above).
+        $commentsHideAdmin = Config::getBool('banlist.hideadminname') && !$userbank->is_admin();
+        $GLOBALS['PDO']->query("SELECT cid, aid, commenttxt, added, edittime,
+											(SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
+											(SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
+											FROM `:prefix_comments` AS C
+											WHERE C.type = 'C' AND bid = :bid ORDER BY added desc");
+        $GLOBALS['PDO']->bind(':bid', $data['ban_id']);
+        $commentres    = $GLOBALS['PDO']->resultset();
 
-        if ($commentres->RecordCount() > 0) {
+        if (count($commentres) > 0) {
             if ($mute_count > 0 || $gag_count > 0) {
                 $delimiter = "&ensp;";
             }
             $comment = [];
             $morecom = 0;
-            while (!$commentres->EOF) {
+            foreach ($commentres as $crow) {
                 $cdata            = [];
                 $cdata['morecom'] = ($morecom == 1 ? true : false);
-                if ($commentres->fields['aid'] == $userbank->GetAid() || $userbank->HasAccess(ADMIN_OWNER)) {
-                    $cdata['editcomlink'] = CreateLinkR('<i class="fas fa-edit fa-lg"></i>', 'index.php?p=commslist&comment=' . $data['ban_id'] . '&ctype=C&cid=' . $commentres->fields['cid'] . $pagelink, 'Edit Comment');
-                    if ($userbank->HasAccess(ADMIN_OWNER)) {
-                        $cdata['delcomlink'] = "<a href=\"#\" class=\"tip\" title=\"Delete Comment\" target=\"_self\" onclick=\"RemoveComment(" . $commentres->fields['cid'] . ",'C'," . (isset($_GET["page"]) ? $_GET["page"] : -1) . ");\"><i class='fas fa-trash fa-lg'></i></a>";
+                if ($crow['aid'] == $userbank->GetAid() || $userbank->HasAccess(WebPermission::Owner)) {
+                    $cdata['editcomlink'] = CreateLinkR('<i class="fas fa-edit fa-lg"></i>', 'index.php?p=commslist&comment=' . $data['ban_id'] . '&ctype=C&cid=' . $crow['cid'] . $pagelink, 'Edit Comment');
+                    if ($userbank->HasAccess(WebPermission::Owner)) {
+                        // #1402: see web/scripts/comment-actions.js for the dispatcher.
+                        $cdata['delcomlink'] = '<a href="#" class="tip" title="Delete Comment" target="_self"'
+                            . ' data-action="comment-delete"'
+                            . ' data-cid="' . (int) $crow['cid'] . '"'
+                            . ' data-ctype="C"'
+                            . ' data-page="' . (isset($_GET["page"]) ? (int) $_GET["page"] : -1) . '"'
+                            . '><i class="fas fa-trash fa-lg"></i></a>';
                     }
                 } else {
                     $cdata['editcomlink'] = "";
                     $cdata['delcomlink']  = "";
                 }
 
-                $cdata['comname']    = $commentres->fields['comname'];
-                $cdata['added']      = Config::time($commentres->fields['added']);
-                $commentText         = html_entity_decode($commentres->fields['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                $cdata['comname']    = $commentsHideAdmin ? '' : $crow['comname'];
+                $cdata['added']      = Config::time($crow['added']);
+                $commentText         = html_entity_decode($crow['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
                 $commentText         = encodePreservingBr($commentText);
                 // Parse links and wrap them in a <a href=""></a> tag to be easily clickable
                 $commentText         = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?\S+)?)?)?)@', '<a href="$1" target="_blank">$1</a>', $commentText);
                 $cdata['commenttxt'] = $commentText;
 
-                if (!empty($commentres->fields['edittime'])) {
-                    $cdata['edittime'] = Config::time($commentres->fields['edittime']);
-                    $cdata['editname'] = $commentres->fields['editname'];
+                if (!empty($crow['edittime'])) {
+                    $cdata['edittime'] = Config::time($crow['edittime']);
+                    $cdata['editname'] = $commentsHideAdmin ? '' : $crow['editname'];
                 } else {
                     $cdata['edittime'] = "";
                     $cdata['editname'] = "";
@@ -660,7 +872,6 @@ while (!$res->EOF) {
 
                 $morecom = 1;
                 array_push($comment, $cdata);
-                $commentres->MoveNext();
             }
         } else {
             $comment = "None";
@@ -675,130 +886,359 @@ while (!$res->EOF) {
 
     $data['ub_reason']   = (isset($data['ub_reason']) ? $data['ub_reason'] : "");
     $data['banlength']   = $data['ban_length'] . " " . $data['ub_reason'];
-    $data['view_edit']   = ($userbank->HasAccess(ADMIN_OWNER | ADMIN_EDIT_ALL_BANS) || ($userbank->HasAccess(ADMIN_EDIT_OWN_BANS) && $res->fields['aid'] == $userbank->GetAid()) || ($userbank->HasAccess(ADMIN_EDIT_GROUP_BANS) && $res->fields['gid'] == $userbank->GetProperty('gid')));
-    $data['view_unban']  = ($userbank->HasAccess(ADMIN_OWNER | ADMIN_UNBAN) || ($userbank->HasAccess(ADMIN_UNBAN_OWN_BANS) && $res->fields['aid'] == $userbank->GetAid()) || ($userbank->HasAccess(ADMIN_UNBAN_GROUP_BANS) && $res->fields['gid'] == $userbank->GetProperty('gid')));
-    $data['view_delete'] = ($userbank->HasAccess(ADMIN_OWNER | ADMIN_DELETE_BAN));
+    $data['view_edit']   = ($userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::EditAllBans)) || ($userbank->HasAccess(WebPermission::EditOwnBans) && $row['aid'] == $userbank->GetAid()) || ($userbank->HasAccess(WebPermission::EditGroupBans) && $row['gid'] == $userbank->GetProperty('gid')));
+    $data['view_unban']  = ($userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::Unban)) || ($userbank->HasAccess(WebPermission::UnbanOwnBans) && $row['aid'] == $userbank->GetAid()) || ($userbank->HasAccess(WebPermission::UnbanGroupBans) && $row['gid'] == $userbank->GetProperty('gid')));
+    $data['view_delete'] = ($userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::DeleteBan)));
+
+    // === Row augmentation (#1123 B4) ======================================
+    // Layer the keys the v2.0.0 template consumes ($comm.cid / .name /
+    // .steam / .type / .length_human / .started_human / .started_iso /
+    // .state / .sname / .admin / .reason / .{edit,unmute,delete}_url)
+    // onto the same $data row that any third-party theme that forked
+    // the pre-v2.0.0 default also consumes. Doing it inside the
+    // original loop is what lets us read raw SQL columns (row_type,
+    // ban_server, server_ip, ban_created) that don't survive into
+    // $data otherwise.
+    $rowRemovalState = BanRemoval::tryFrom((string) ($row['row_type'] ?? ''));
+    $banLengthInt    = (int) $row['ban_length'];
+    $banEndsInt      = (int) $row['ban_ends'];
+    $cTimeInt        = (int) $row['c_time'];
+    $stateLabel = match (true) {
+        $rowRemovalState === BanRemoval::Deleted, $rowRemovalState === BanRemoval::Unbanned => 'unmuted',
+        $rowRemovalState === BanRemoval::Expired || ($banLengthInt > 0 && $banEndsInt < $cTimeInt) => 'expired',
+        $banLengthInt === 0                       => 'permanent',
+        default                                   => 'active',
+    };
+
+    $typeInt = (int) $row['type'];
+    switch ($typeInt) {
+        case 1:
+            $typeLabel = 'mute';
+            break;
+        case 2:
+            $typeLabel = 'gag';
+            break;
+        case 3:
+            // SourceComms forks sometimes assign 3 to the combined
+            // "silence" (mute+gag); display it the same way regardless
+            // of whether a write path actually emits the row.
+            $typeLabel = 'silence';
+            break;
+        default:
+            $typeLabel = 'unknown';
+    }
+
+    $banServerInt = (int) $row['ban_server'];
+    if ($banServerInt === 0) {
+        $snameLabel = 'Web Block';
+    } else {
+        $snameLabel = !empty($row['server_ip'])
+            ? (string) $row['server_ip']
+            : 'Server #' . $banServerInt;
+    }
+
+    $startedTs = (int) $row['ban_created'];
+    $key       = (string) ($_SESSION['banlist_postkey'] ?? '');
+
+    $data['cid']           = (int) $row['ban_id'];
+    $data['name']          = stripslashes((string) $data['player']);
+    $data['steam']         = (string) $data['steamid'];
+    // Stable per-name hue for the row's avatar tile. crc32 keeps
+    // identically-named players coloured the same across sessions
+    // without any storage; the modulo into 360 gives an HSL hue.
+    $data['avatar_hue']    = (int) (sprintf('%u', crc32($data['name'] . $data['steam'])) % 360);
+    // Kept as a string label for the new theme's pill/icon switch. The
+    // legacy default theme only reads `type_icon` (HTML-rendered above)
+    // so overwriting `type` is safe — see the dual-theme audit in the
+    // CommsListView class docblock.
+    $data['type']          = $typeLabel;
+    $data['length_human']  = (string) $data['ban_length'];
+    $data['started_human'] = (string) $data['ban_date'];
+    // ISO 8601 (`c`) so the new theme's <time datetime="…"> hooks give
+    // the browser a parseable absolute timestamp regardless of the
+    // admin-configured `config.dateformat`.
+    $data['started_iso']   = date('c', $startedTs);
+    $data['state']         = $stateLabel;
+    $data['sname']         = $snameLabel;
+    $data['edit_url']      = 'index.php?p=admin&c=comms&o=edit&id=' . (int) $row['ban_id'] . '&key=' . urlencode($key);
+    $data['delete_url']    = 'index.php?p=commslist&a=delete&id=' . (int) $row['ban_id'] . '&key=' . urlencode($key);
+    if ($stateLabel === 'active' || $stateLabel === 'permanent') {
+        $verb              = $typeInt === 1 ? 'unmute' : ($typeInt === 2 ? 'ungag' : null);
+        $data['unmute_url'] = $verb !== null
+            ? 'index.php?p=commslist&a=' . $verb . '&id=' . (int) $row['ban_id'] . '&key=' . urlencode($key)
+            : null;
+    } else {
+        $data['unmute_url'] = null;
+    }
+
     array_push($bans, $data);
-    $res->MoveNext();
 }
 
 if (isset($_GET['advSearch'])) {
-    $advSearchString = "&advSearch=" . (isset($_GET['advSearch']) ? $_GET['advSearch'] : '') . "&advType=" . (isset($_GET['advType']) ? $_GET['advType'] : '');
+    $advSearchString = "&advSearch=" . urlencode(isset($_GET['advSearch']) ? $_GET['advSearch'] : '') . "&advType=" . urlencode(isset($_GET['advType']) ? $_GET['advType'] : '');
 } else {
     $advSearchString = '';
 }
 
-if ($page > 1) {
-    if (isset($_GET['c']) && $_GET['c'] == "comms") {
-        $prev = CreateLinkR('<i class="fas fa-arrow-left fa-lg"></i> prev', "javascript:void(0);", "", "_self", false, $prev);
-    } else {
-        $prev = CreateLinkR('<i class="fas fa-arrow-left fa-lg"></i> prev', "index.php?p=commslist&page=" . ($page - 1) . (isset($_GET['searchText']) > 0 ? "&searchText=" . $_GET['searchText'] : '' . $advSearchString));
-    }
+// #1225: when the result count is zero we short-circuit to an empty
+// string. Mirrors page.banlist.php — the legacy theme reads $ban_nav
+// inside its `{if !empty($ban_nav)}` guard, and the new theme reads
+// $pagination separately (page_comms.tpl gates that block on
+// `$pagination.total > 0`). With no rows AND no filter, the empty
+// state owns the surface alone instead of being shadowed by a
+// "displaying 0 - 0 of 0 results" pagination shell.
+if ($BanCount === 0) {
+    $ban_nav = '';
 } else {
-    $prev = "";
-}
-if ($BansEnd < $BanCount) {
-    if (isset($_GET['c']) && $_GET['c'] == "comms") {
-        if (!isset($nxt)) {
-            $nxt = "";
+    if ($page > 1) {
+        if (isset($_GET['c']) && $_GET['c'] == "comms") {
+            $prev = CreateLinkR('<i class="fas fa-arrow-left fa-lg"></i> prev', "javascript:void(0);", "", "_self", false, $prev);
+        } else {
+            $prev = CreateLinkR('<i class="fas fa-arrow-left fa-lg"></i> prev', "index.php?p=commslist&page=" . ($page - 1) . (isset($_GET['searchText']) > 0 ? "&searchText=" . urlencode($_GET['searchText']) : '' . $advSearchString));
         }
-        $next = CreateLinkR('next <i class="fas fa-arrow-right fa-lg"></i>', "javascript:void(0);", "", "_self", false, $nxt);
     } else {
-        $next = CreateLinkR('next <i class="fas fa-arrow-right fa-lg"></i>', "index.php?p=commslist&page=" . ($page + 1) . (isset($_GET['searchText']) ? "&searchText=" . $_GET['searchText'] : '' . $advSearchString));
+        $prev = "";
     }
-} else {
-    $next = "";
-}
-
-//=================[ Start Layout ]==================================
-$ban_nav = 'displaying&nbsp;' . $BansStart . '&nbsp;-&nbsp;' . $BansEnd . '&nbsp;of&nbsp;' . $BanCount . '&nbsp;results';
-
-if (strlen($prev) > 0) {
-    $ban_nav .= ' | <b>' . $prev . '</b>';
-}
-if (strlen($next) > 0) {
-    $ban_nav .= ' | <b>' . $next . '</b>';
-}
-$pages = ceil($BanCount / $BansPerPage);
-if ($pages > 1) {
-    $ban_nav .= '&nbsp;<select onchange="changePage(this,\'C\',\'' . (isset($_GET['advSearch']) ? $_GET['advSearch'] : '') . '\',\'' . (isset($_GET['advType']) ? $_GET['advType'] : '') . '\');">';
-    for ($i = 1; $i <= $pages; $i++) {
-        if (isset($_GET["page"]) && $i == $_GET["page"]) {
-            $ban_nav .= '<option value="' . $i . '" selected="selected">' . $i . '</option>';
-            continue;
+    if ($BansEnd < $BanCount) {
+        if (isset($_GET['c']) && $_GET['c'] == "comms") {
+            if (!isset($nxt)) {
+                $nxt = "";
+            }
+            $next = CreateLinkR('next <i class="fas fa-arrow-right fa-lg"></i>', "javascript:void(0);", "", "_self", false, $nxt);
+        } else {
+            $next = CreateLinkR('next <i class="fas fa-arrow-right fa-lg"></i>', "index.php?p=commslist&page=" . ($page + 1) . (isset($_GET['searchText']) ? "&searchText=" . urlencode($_GET['searchText']) : '' . $advSearchString));
         }
-        $ban_nav .= '<option value="' . $i . '">' . $i . '</option>';
+    } else {
+        $next = "";
     }
-    $ban_nav .= '</select>';
+
+    //=================[ Start Layout ]==================================
+    $ban_nav = 'displaying&nbsp;' . $BansStart . '&nbsp;-&nbsp;' . $BansEnd . '&nbsp;of&nbsp;' . $BanCount . '&nbsp;results';
+
+    if ($prev !== '') {
+        $ban_nav .= ' | <b>' . $prev . '</b>';
+    }
+    if ($next !== '') {
+        $ban_nav .= ' | <b>' . $next . '</b>';
+    }
+    $pages = ceil($BanCount / $BansPerPage);
+    if ($pages > 1) {
+        // Issue #1113: see page.banlist.php for the layered-escape rationale.
+        $advSearchJs = htmlspecialchars(addslashes((string)($_GET['advSearch'] ?? '')), ENT_QUOTES, 'UTF-8');
+        $advTypeJs   = htmlspecialchars(addslashes((string)($_GET['advType']   ?? '')), ENT_QUOTES, 'UTF-8');
+        $ban_nav .= '&nbsp;<select onchange="changePage(this,\'C\',\'' . $advSearchJs . '\',\'' . $advTypeJs . '\');">';
+        for ($i = 1; $i <= $pages; $i++) {
+            if (isset($_GET["page"]) && $i == $_GET["page"]) {
+                $ban_nav .= '<option value="' . $i . '" selected="selected">' . $i . '</option>';
+                continue;
+            }
+            $ban_nav .= '<option value="' . $i . '">' . $i . '</option>';
+        }
+        $ban_nav .= '</select>';
+    }
 }
 
 //COMMENT STUFF
 //----------------------------------------
+// Comment-drawer locals. Computed into PHP locals here (instead of
+// the older `$theme->assign(...)` calls) so they can be threaded
+// into the View constructor below — Renderer copies every public
+// property onto $theme. The shipped v2.0.0 default theme defers the
+// editor UI to a follow-up; any third-party theme that forked the
+// pre-v2.0.0 default still renders it when `{if $comment}` is truthy.
+$ceditType  = '';
+$ceditText  = '';
+$ceditCtype        = '';
+$ceditCid          = '';
+$ceditPage         = -1;
+$ceditOthers = [];
 if (isset($_GET["comment"])) {
-    $theme->assign('commenttype', (isset($_GET["cid"]) ? "Edit" : "Add"));
+    $ceditType = isset($_GET["cid"]) ? "Edit" : "Add";
     if (isset($_GET["cid"])) {
-        $ceditdata      = $GLOBALS['db']->GetRow("SELECT * FROM " . DB_PREFIX . "_comments WHERE cid = '" . (int) $_GET["cid"] . "'");
-        $ctext          = html_entity_decode($ceditdata['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $ctext          = htmlspecialchars($ctext, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $GLOBALS['PDO']->query("SELECT * FROM `:prefix_comments` WHERE cid = :cid");
+        $GLOBALS['PDO']->bind(':cid', (int) $_GET["cid"]);
+        $ceditdata      = $GLOBALS['PDO']->single();
+        $ceditText = html_entity_decode($ceditdata['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $cotherdataedit = " AND cid != '" . (int) $_GET["cid"] . "'";
     } else {
         $cotherdataedit = "";
-        $ctext          = "";
     }
-    $cotherdata = $GLOBALS['db']->Execute("SELECT cid, aid, commenttxt, added, edittime,
-											(SELECT user FROM `" . DB_PREFIX . "_admins` WHERE aid = C.aid) AS comname,
-											(SELECT user FROM `" . DB_PREFIX . "_admins` WHERE aid = C.editaid) AS editname
-											FROM `" . DB_PREFIX . "_comments` AS C
-											WHERE type = ? AND bid = ?" . $cotherdataedit . " ORDER BY added desc", array(
+    $cotherdata = $GLOBALS['PDO']->query("SELECT cid, aid, commenttxt, added, edittime,
+											(SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
+											(SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
+											FROM `:prefix_comments` AS C
+											WHERE type = ? AND bid = ?" . $cotherdataedit . " ORDER BY added desc")->resultset([
         $_GET["ctype"],
-        $_GET["comment"]
-    ));
+        $_GET["comment"],
+    ]);
 
-    $ocomments = [];
-    while (!$cotherdata->EOF) {
+    // #1500: same gate as the per-comm comment thread above — null admin
+    // usernames for public viewers so this comment-edit surface (reachable
+    // by anyone via ?comment=N) doesn't leak them regardless of theme.
+    $commentsHideAdmin = Config::getBool('banlist.hideadminname') && !$userbank->is_admin();
+
+    foreach ($cotherdata as $cdrow) {
         $coment               = [];
-        $coment['comname']    = $cotherdata->fields['comname'];
-        $coment['added']      = Config::time($cotherdata->fields['added']);
-        $commentText          = html_entity_decode($cotherdata->fields['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $coment['comname']    = $commentsHideAdmin ? '' : $cdrow['comname'];
+        $coment['added']      = Config::time($cdrow['added']);
+        $commentText          = html_entity_decode($cdrow['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $commentText          = encodePreservingBr($commentText);
         $commentText          = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?\S+)?)?)?)@', '<a href="$1" target="_blank">$1</a>', $commentText);
         $coment['commenttxt'] = $commentText;
-        if ($cotherdata->fields['editname'] != "") {
-            $coment['edittime'] = Config::time($cotherdata->fields['edittime']);
-            $coment['editname'] = $cotherdata->fields['editname'];
+        if ($cdrow['editname'] != "") {
+            $coment['edittime'] = Config::time($cdrow['edittime']);
+            $coment['editname'] = $commentsHideAdmin ? '' : $cdrow['editname'];
         } else {
             $coment['editname'] = "";
             $coment['edittime'] = "";
         }
-        array_push($ocomments, $coment);
-        $cotherdata->MoveNext();
+        array_push($ceditOthers, $coment);
     }
 
-    $theme->assign('page', (isset($_GET["page"]) ? $_GET["page"] : -1));
-    $theme->assign('othercomments', $ocomments);
-    $theme->assign('commenttext', (isset($ctext) ? $ctext : ""));
-    $theme->assign('ctype', $_GET["ctype"]);
-    $theme->assign('cid', (isset($_GET["cid"]) ? $_GET["cid"] : ""));
-    $theme->assign('canedit', $userbank->is_admin());
+    $ceditPage = isset($_GET["page"]) ? (int) $_GET["page"] : -1;
+    $ceditCtype = (string) $_GET["ctype"];
+    $ceditCid   = isset($_GET["cid"]) ? (int) $_GET["cid"] : '';
 }
-$theme->assign('view_comments', $view_comments);
-$theme->assign('comment', (isset($_GET["comment"]) && $view_comments ? $_GET["comment"] : false));
+$ceditBid = (isset($_GET["comment"]) && $view_comments) ? (int) $_GET["comment"] : false;
 //----------------------------------------
 
 unset($_SESSION['CountryFetchHndl']);
 
-$theme->assign('searchlink', $searchlink);
-$theme->assign('hidetext', $hidetext);
-$theme->assign('total_bans', $BanCount);
-$theme->assign('active_bans', $BanCount);
+// `searchlink` is conditionally assigned in the search/advSearch/no-search
+// branches above. Normalise it before threading it into the View so we
+// don't widen the existing `Variable $searchlink might not be defined`
+// baseline entry that catches the older `$theme->assign('searchlink', …)`
+// reference in the original code path.
+$searchlink = $searchlink ?? '';
 
-$theme->assign('ban_nav', $ban_nav);
-$theme->assign('ban_list', $bans);
+// #1274: extend $searchlink with the chip TYPE (so toggle URL +
+// pagination preserve a Mute/Gag/Silence selection across navigations).
+// NOTE: chip STATE (`?state=active`) is intentionally NOT folded into
+// $searchlink — the toggle URL needs to be able to drop it cleanly
+// when the user clicks "Show inactive". $paginationLink below adds
+// state on top so paginated pages still preserve the active filter.
+if ($chipType !== '') {
+    $searchlink .= '&type=' . urlencode($chipType);
+}
+$paginationLink = $searchlink . ($chipStateActive ? '&state=active' : '');
+
 $theme->assign('admin_nick', $userbank->GetProperty("user"));
-
 $theme->assign('admin_postkey', $_SESSION['banlist_postkey']);
-$theme->assign('hideadminname', (Config::getBool('banlist.hideadminname') && !$userbank->is_admin()));
-$theme->assign('general_unban', $userbank->HasAccess(ADMIN_OWNER | ADMIN_UNBAN | ADMIN_UNBAN_OWN_BANS | ADMIN_UNBAN_GROUP_BANS));
-$theme->assign('can_delete', $userbank->HasAccess(ADMIN_DELETE_BAN));
-$theme->assign('view_bans', ($userbank->HasAccess(ADMIN_OWNER | ADMIN_EDIT_ALL_BANS | ADMIN_EDIT_OWN_BANS | ADMIN_EDIT_GROUP_BANS | ADMIN_UNBAN | ADMIN_UNBAN_OWN_BANS | ADMIN_UNBAN_GROUP_BANS | ADMIN_DELETE_BAN)));
-$theme->display('page_comms.tpl');
+$theme->assign('active_bans', $BanCount);
+$theme->assign('general_unban', $userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::Unban, WebPermission::UnbanOwnBans, WebPermission::UnbanGroupBans)));
+$theme->assign('can_delete', $userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::DeleteBan)));
+
+$hideAdminName = Config::getBool('banlist.hideadminname') && !$userbank->is_admin();
+$viewBans      = (bool) $userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::EditAllBans, WebPermission::EditOwnBans, WebPermission::EditGroupBans, WebPermission::Unban, WebPermission::UnbanOwnBans, WebPermission::UnbanGroupBans, WebPermission::DeleteBan));
+
+// === View bag (#1123 B4) ==============================================
+// Server filter dropdown — small list (one row per enabled server). The
+// schema has no hostname column; the dropdown shows ip:port and a
+// follow-up ticket can swap in a sb.api.call-driven resolver.
+$serverRows = $GLOBALS['PDO']->query(
+    "SELECT sid, ip, port FROM `:prefix_servers` WHERE enabled = 1 ORDER BY ip"
+)->resultset();
+$serversFilter = [];
+foreach ($serverRows as $sr) {
+    $serversFilter[] = [
+        'sid'  => (int) $sr['sid'],
+        'name' => (string) $sr['ip'] . ':' . (int) $sr['port'],
+    ];
+}
+
+$filters = [
+    'search' => isset($_GET['searchText']) ? (string) $_GET['searchText'] : '',
+    'server' => isset($_GET['server']) ? (string) $_GET['server'] : '',
+    'time'   => isset($_GET['time']) ? (string) $_GET['time'] : '',
+    'state'  => $chipStateActive ? 'active' : '',
+    'type'   => $chipType,
+];
+
+$pagination = [
+    'from'     => $BanCount === 0 ? 0 : $BansStart + 1,
+    'to'       => $BansEnd,
+    'total'    => $BanCount,
+    'prev_url' => $page > 1
+        ? 'index.php?p=commslist&page=' . ($page - 1) . $paginationLink
+        : null,
+    'next_url' => $BansEnd < $BanCount
+        ? 'index.php?p=commslist&page=' . ($page + 1) . $paginationLink
+        : null,
+];
+
+$hideInactive = isset($_SESSION['hideinactive']);
+// #1274: the toggle button is the single OFF-switch for active-only mode.
+// When the chip's `?state=active` is on the URL, the toggle's "Show
+// inactive" path must clear BOTH the session AND the URL state — else
+// clicking the toggle would clear the session but leave the chip
+// pressed, leaving us in a weird half-on state. $searchlink omits
+// `state=active` precisely so this URL composes cleanly.
+$hideInactiveToggle = 'index.php?p=commslist&hideinactive=' . ($isActiveOnly ? 'false' : 'true') . $searchlink;
+
+// #1207: filter-aware empty state. Any filter chip / search / time /
+// hide-inactive flips this; the template branches the empty-state
+// copy + CTA on the result (first-run vs filtered).
+$commsIsFiltered =
+    $filters['search'] !== ''
+    || $filters['server'] !== ''
+    || $filters['time']   !== ''
+    || $filters['state']  !== ''
+    || $filters['type']   !== ''
+    || $hideInactive;
+
+// #1315: auto-open the advanced-search disclosure on a post-submit
+// paint. Bare `?p=commslist` and simple-bar filters
+// (`?searchText=` / `?server=` / `?time=` / `?type=` / `?state=`)
+// leave it closed so the unfiltered list reaches above the fold. The
+// legacy ?advSearch shim is the only surface that re-opens it,
+// mirroring v1.x behaviour where the form was always-open below the
+// row table — the v2.0 disclosure is the post-#1303 collapsed shape
+// with the same post-submit affordance the admin-admins page uses.
+$commsAdvancedOpen =
+    isset($_GET['advSearch']) && (string) $_GET['advSearch'] !== '';
+
+// Aggregate permission flags. Each precomputed via Perms::for($userbank)
+// so the template's {if $can_*} reads stay opinion-free about the bit
+// math — see the AGENTS.md "Permissions" section + Perms::for() docblock.
+$perms             = \Sbpp\View\Perms::for($userbank);
+$can_add_comm     = $perms['can_owner'] || $perms['can_add_ban'];
+$can_edit_comm    = $perms['can_owner']
+    || $perms['can_edit_all_bans']
+    || $perms['can_edit_own_bans']
+    || $perms['can_edit_group_bans'];
+$can_unmute_gag   = $perms['can_owner']
+    || $perms['can_unban']
+    || $perms['can_unban_own_bans']
+    || $perms['can_unban_group_bans'];
+$can_delete_comm  = $perms['can_owner'] || $perms['can_delete_ban'];
+
+\Sbpp\View\Renderer::render($theme, new \Sbpp\View\CommsListView(
+    total_bans:               $BanCount,
+    searchlink:               $searchlink,
+    ban_list:                 $bans,
+    filters:                  $filters,
+    servers:                  $serversFilter,
+    pagination:               $pagination,
+    hide_inactive:            $hideInactive,
+    is_active_only:           $isActiveOnly,
+    hide_inactive_toggle_url: $hideInactiveToggle,
+    can_add_comm:             $can_add_comm,
+    can_edit_comm:            $can_edit_comm,
+    can_unmute_gag:           $can_unmute_gag,
+    can_delete_comm:          $can_delete_comm,
+    is_filtered:              $commsIsFiltered,
+    comment:                  $ceditBid,
+    commenttype:              $ceditType,
+    canedit:                  $userbank->is_admin(),
+    commenttext:              $ceditText,
+    ctype:                    $ceditCtype,
+    cid:                      $ceditCid,
+    page:                     $ceditPage,
+    othercomments:            $ceditOthers,
+    ban_nav:                  $ban_nav,
+    hidetext:                 $hidetext,
+    hideadminname:            $hideAdminName,
+    view_comments:            (bool) $view_comments,
+    view_bans:                $viewBans,
+    is_advanced_search_open:  $commsAdvancedOpen,
+));

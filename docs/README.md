@@ -1,0 +1,234 @@
+# SourceBans++ docs
+
+Source of truth for the SourceBans++ documentation site published at
+<https://sbpp.github.io/>. Built with [Astro](https://astro.build/) +
+[Starlight](https://starlight.astro.build/) and deployed via the
+sibling `sbpp/sbpp.github.io` repo (which is now a thin deploy
+shell — all authoring happens here).
+
+## Where things live
+
+| Path | What it is |
+| ---- | ---------- |
+| `astro.config.mjs` | Site config, sidebar tree, social links, custom CSS wiring. |
+| `src/content.config.ts` | Astro content-collection schema. Re-exports Starlight's `docsLoader` + `docsSchema` so the `src/content/docs/` collection is wired with the right loader and front-matter validation. Edit when adding a new collection (none currently). |
+| `src/content/docs/` | All page content, organised by sidebar group (`getting-started/`, `setup/`, `troubleshooting/`, …). `.md` for plain pages, `.mdx` for pages that use Starlight components (Tabs, LinkCard, Card, etc.). |
+| `src/content/docs/sponsor.mdx` | Canonical sponsor landing page reached via the topbar heart icon, the per-page footer link, and `.github/FUNDING.yml`'s `custom:` URL (issue #1416). Uses `template: splash` (no sidebar) and is intentionally absent from the sidebar tree in `astro.config.mjs`. Renders the funding-platforms list + tier-grouped sponsor roll via `src/components/Sponsors.astro`. |
+| `src/content/docs/rookhelm.mdx` | In-docs hub for RookHelm, the commercial hosted alternative to self-hosting SourceBans++. Reached from the top-level `RookHelm` sidebar entry (registered in `astro.config.mjs`), the homepage / overview / data-export callouts, and (indirectly) the header CTA in `src/components/SocialIcons.astro` which links out to the product site. Framed neutrally as a paid alternative; SourceBans++ stays free + self-hostable. **Deliberately avoids enumerating RookHelm's features** — those live on rookhelm.com and would drift stale here, so the page positions in general terms ("more moderation tooling built in") and links out for specifics. It shouldn't need updating when RookHelm's feature set changes. Keep every RookHelm callout on the same general-positioning rule — across the docs (this page + the README / homepage / overview / data-export mentions) AND the one in-panel surface: a subtle, owner-only migration note on the Full data export page (`web/themes/default/page_admin_export.tpl`), placed there because the export bundle is exactly what RookHelm imports. That's the only RookHelm callout inside the shipped panel by design (owner-only, contextual, no public-page / login / sub-admin exposure); don't add panel callouts elsewhere without the same audience + subtlety bar. **Outbound-link tagging:** every link that points straight at `rookhelm.com` (this page's 3 links, the header CTA in `SocialIcons.astro`, the root `README.md` callout, and the panel export-page note) carries a UTM referral tag — `?utm_source=sourcebans-pp&utm_medium=referral&utm_content=<placement>` (`docs-page` / `docs-nav` / `readme` / `panel-export`). The in-docs links on `sbpp.github.io` are dofollow (Starlight adds no `rel="nofollow"`) and the panel note uses `rel="noopener"` (dofollow, referrer preserved); the root README link is force-`nofollow`'d by GitHub's markdown pipeline (unavoidable), but the UTM tag still attributes the click. Add the same tag to any new outbound RookHelm link; the internal `/rookhelm/` callouts (homepage / overview / data-export) don't need it since they stay on-site. |
+| `src/data/sponsors.json` | Canonical source of truth for the project's funding platforms, sponsor tiers, and sponsor roll. Consumed by `src/components/Sponsors.astro` and (eventually) by the main repo `README.md`'s `<!-- sponsors:start --> ... <!-- sponsors:end -->` injection markers + the panel footer in companion issue #1417. Adding a new platform (Open Collective, Patreon, …) or a new sponsor is a one-line edit here — no component change required. |
+| `src/styles/sbpp.css` | Panel-parity overrides — brand orange, zinc neutrals, semantic asides, geometry, focus ring. Mirrors `web/themes/default/css/theme.css` token-for-token. **When the panel's `:root` / `html.dark` blocks change, mirror the change here in the same PR** (AGENTS.md "Keep the docs in sync"). |
+| `src/components/ThemeProvider.astro` | Override of Starlight's stock dark-leaning theme provider. Defaults the unset preference to `'auto'` (resolves via `prefers-color-scheme`) to match the panel's `'system'` first-paint default, AND ships a `<noscript><style>` block that re-applies the LIGHT-mode tokens onto `:root[data-theme='dark']` so JS-disabled visitors see light (Starlight 0.30 hardcodes `data-theme="dark"` SSR'd; the panel paints light without JS, so this guard restores parity). The user toggle still wins on subsequent visits via `localStorage['starlight-theme']`. |
+| `src/components/Footer.astro` | Override of Starlight's stock per-page footer. Re-renders the stock EditLink + LastUpdated + Pagination + optional Built-with-Starlight kudos (pulled straight from Starlight's `virtual:` namespace so future Starlight upgrades pick up new footer chrome automatically) and appends a small "Support SourceBans++" affordance below them. The topbar already carries a matching heart-icon social link; the footer is the second surface so anyone who reads to the end of a docs page can find the sponsor link without scrolling back to the top. Both surfaces route to the canonical `/sponsor/` landing page (issue #1416), not a single platform URL — adding Open Collective / Patreon later is a data-only change on `src/data/sponsors.json`. |
+| `src/components/Sponsors.astro` | Reusable component that renders the funding-platforms list + tier-grouped sponsor roll from `src/data/sponsors.json`. Used on `sponsor.mdx` today; index.mdx (and eventually the panel footer from companion issue #1417) can embed it with `showPlatforms={false}` to reuse just the tier-grouped list. Two props: `showPlatforms` (default `true`) gates the platforms section, `showEmptyHint` (default `true`) gates the "be the first" line when the sponsor roll is empty. |
+| `src/components/SocialIcons.astro` | Override of Starlight's stock header social-icon row (GitHub / Discord / sponsor heart). Prepends a persistent "RookHelm ↗" pill CTA linking out to rookhelm.com, then re-implements the stock icon loop inline. It does NOT re-render the stock component via the `virtual:` namespace the way `Footer.astro` does: `import ... from 'virtual:starlight/components/SocialIcons'` inside this override resolves back to the override itself and self-recurses until the build stack blows (`RangeError`). The inline loop mirrors `node_modules/@astrojs/starlight/components/SocialIcons.astro` verbatim (same `config.social` source, same markup, same scoped styles) — re-diff it against upstream on a Starlight bump. Starlight renders SocialIcons in both the desktop header row and the mobile-menu preferences panel, so the pill shows at every viewport (no media-query hide). The pill `href` carries the outbound referral tag (see the `rookhelm.mdx` row); the in-docs detail page is `rookhelm.mdx`. |
+| `src/assets/logo.svg` + `public/favicon.svg` | The panel's brand mark, copied verbatim from `web/themes/default/images/favicon.svg`. |
+| `src/assets/auto/{install,panel}/` | Auto-captured screenshots from `docs/scripts/capture.mjs`. **These ARE committed** so the screenshot diff lands with the UI change. |
+| `scripts/capture.mjs` | Playwright-driven capture script (see [Capturing screenshots](#capturing-screenshots) below). |
+| `tsconfig.json` | Extends `astro/tsconfigs/strict`. |
+
+## Local dev
+
+Standard Astro dev loop. Node 20 LTS or newer.
+
+```sh
+cd docs
+npm install
+npm run dev
+```
+
+The dev server prints a localhost URL (default `http://localhost:4321`).
+Edits to anything under `src/` hot-reload without a restart.
+
+To produce a production build:
+
+```sh
+cd docs
+npm run build
+npm run preview            # serve the built site locally
+```
+
+The production build runs Pagefind under the hood and writes the
+search index into `dist/pagefind/`. The deploy shell in
+sbpp.github.io picks this up and serves it as-is.
+
+## Capturing screenshots
+
+Auto-captured screenshots live under `src/assets/auto/`. The capture
+script needs the dev stack running:
+
+```sh
+# from the repo root
+./sbpp.sh up
+
+# wait for the panel to come up at http://localhost:8080
+# (admin/admin login is seeded automatically)
+
+cd docs
+npm install                # first time only
+npx playwright install chromium      # first time only
+npm run capture
+```
+
+The script writes PNGs into `src/assets/auto/install/` and
+`src/assets/auto/panel/`. Inspect `git diff src/assets/auto/` to see
+what changed; commit the deltas alongside the UI change that produced
+them.
+
+Capture geometry:
+
+- **Viewport: 1920×1080 (Full HD), full-page screenshots.** The
+  rendered PNG carries the full scrollable surface so high-DPI /
+  zoomed-in inspection works without re-running the capture. The
+  docs site renders the PNGs at responsive widths.
+- **Panel routes are captured TWICE — once light, once dark.**
+  Each route emits a `<route>-light.png` and a `<route>-dark.png`
+  (e.g. `panel-02-dashboard-light.png` /
+  `panel-02-dashboard-dark.png`). The dark pass seeds
+  `localStorage['sbpp-theme']` before navigation so the inline FOUC
+  bootloader in `core/header.tpl` lands the `dark` class on
+  `<html>` on the first paint (no white flash). See AGENTS.md
+  "Anti-FOUC theme bootloader" for the contract.
+- **Install routes are captured ONCE in light.** The wizard's
+  `_chrome.tpl` doesn't load `theme.js` or the FOUC bootloader (the
+  wizard has no theme toggle by design — see AGENTS.md "Install
+  wizard"); a "dark install" capture would just be the same light
+  render with a different filename.
+- **The output subdirectory is wiped at the start of each run.**
+  `CAPTURE_ROUTES=panel` clears `src/assets/auto/panel/` before
+  capturing, `=install` clears `src/assets/auto/install/`, and the
+  default `=all` clears both. Stale PNGs from earlier runs (route
+  list changes, pre-dual-theme legacy filenames) don't linger in
+  the committed diff.
+
+The hardcoded `STEAM_API_KEY` is `00000000000000000000000000000000`
+(an all-zero dummy) — the dev seed never round-trips back to Steam,
+so the zero key is safe and avoids leaking real keys into screenshots.
+
+To override the panel URL (e.g. running a parallel stack on a
+different port — see AGENTS.md "Parallel stacks"):
+
+```sh
+PANEL_URL=http://localhost:8189 npm run capture
+```
+
+### `CAPTURE_ROUTES` (install vs panel)
+
+`CAPTURE_ROUTES` picks which route group to capture; defaults to
+`all` (both groups). Useful when iterating on a specific surface:
+
+```sh
+CAPTURE_ROUTES=panel   npm run capture    # post-install panel only
+CAPTURE_ROUTES=install npm run capture    # wizard surfaces only
+```
+
+The install captures have a sharp edge worth knowing about. The
+dev stack's entrypoint (`docker/php/web-entrypoint.sh`) creates
+`web/config.php` on first boot, and the install wizard's #1335 C2
+guard refuses to start whenever `config.php` exists — it renders a
+static 409 "already installed" page instead of step 1. Running
+`CAPTURE_ROUTES=install` against a default-boot dev stack therefore
+silently screenshots that 409 page for every install route, which
+is almost never what you want.
+
+To capture real wizard surfaces locally, move `config.php` aside
+for the duration of the install pass and restore it afterwards:
+
+```sh
+# from the repo root, with the dev stack already running
+mv web/config.php .sbpp-config-stash.php
+( cd docs && CAPTURE_ROUTES=install npm run capture )
+mv .sbpp-config-stash.php web/config.php
+```
+
+The stash path is a sibling of `web/` on purpose. The dev container's
+entrypoint runs as root, so `web/config.php` lands on the bind mount
+owned by `root:root`; stashing through `/tmp` is a sticky-bit trap —
+the same-filesystem rename preserves ownership, and the unprivileged
+restore can't unlink a root-owned file out of a sticky directory
+(per `rename(2)`'s `EPERM` semantics — see the workflow's stash step
+for the full rationale). `.sbpp-config-stash.php` is gitignored so an
+interrupted run never leaks the credentials into a commit.
+
+CI does the same stash/restore dance automatically in
+`docs-screenshots-capture.yml`; this is only relevant when iterating
+locally.
+
+## CI
+
+Four workflows under `.github/workflows/` cover the docs site:
+
+| Workflow | Trigger | What it does |
+| -------- | ------- | ------------ |
+| `docs-build.yml` | PRs + main pushes touching `docs/**` | Runs `npm run build`. Uploads the built `dist/` as an artifact. |
+| `docs-deploy-trigger.yml` | main pushes touching `docs/**` | Fires a `repository_dispatch` (event_type=`docs-changed`) into `sbpp/sbpp.github.io`, which kicks the actual GitHub Pages deploy. Requires the `DOCS_DEPLOY_PAT` repo secret (fine-grained PAT, `Actions: Read and write` on `sbpp.github.io` only). Until the secret is set, the dispatch step is skipped on every run (the run is green-with-skipped, not red-failing); the deploy shell in `sbpp.github.io` still has a `workflow_dispatch` button as a manual fallback. |
+| `docs-screenshots-build.yml` | PRs touching `docs/scripts/capture.mjs` or `docs/package*.json` | Sandboxed verification: `npm ci` + `node --check scripts/capture.mjs`. No secrets, no write permissions; runs the standard `pull_request` token. Catches "did the capture script still parse" on every PR. |
+| `docs-screenshots-capture.yml` | PRs labelled `safe-to-screenshot` (same-repo only) + `workflow_dispatch` | Boots the dev stack, seeds the DB, runs `npm run capture` from a TRUSTED-FROM-MAIN checkout, commits PNG deltas back to the PR branch. |
+
+### Screenshot capture security model
+
+`docs-screenshots-capture.yml` runs `pull_request_target` with
+`contents: write` so it can write the regenerated PNGs back to the PR
+branch. To keep that token out of contributor reach, the workflow:
+
+1. **Splits the checkout.** The trusted code surface (the capture
+   script + its package-lock.json) is checked out from the PR's base
+   branch (effectively `main`). The PR head is checked out into a
+   separate directory that's used only for `docker compose up` and as
+   the screenshot output destination — no JS/PHP code from the PR
+   head runs on the runner.
+2. **Gates on the `safe-to-screenshot` label.** A maintainer applies
+   the label after reviewing the PR's docker / install / panel
+   changes; the workflow's `if:` guard short-circuits without it.
+3. **Auto-strips the label on every push.** A
+   `unlabel-on-synchronize` job removes `safe-to-screenshot` whenever
+   a new commit lands so the maintainer must re-apply after reviewing
+   the new code. A label applied to a benign-looking opening commit
+   doesn't grant blanket consent for a follow-up commit.
+4. **Refuses fork PRs.** The `head.repo.full_name == github.repository`
+   check rejects fork-originated PRs at the workflow level — pushing
+   the branch into the upstream repo first is the supported path for
+   contributions that need screenshot regeneration.
+
+Maintainers: when you apply `safe-to-screenshot`, eyeball the PR's
+diff under `docker/`, `web/install/`, the `web/themes/default/`
+templates, and `docs/scripts/capture.mjs` first. Anything that could
+exfil environment data or escape the docker sandbox is the threat
+model; everything else is fine.
+
+The label needs to exist in the repo first — until that happens (one-
+time repo setup), the workflow runs but its `if:` gate silently
+returns false. Create the label via the repo's Issues → Labels page
+(or `gh label create safe-to-screenshot --description "Maintainer ack to run docs-screenshots-capture.yml" --color 'D73A4A'`).
+
+## Authoring conventions
+
+- Plain Markdown by default. Use `.mdx` only when the page needs
+  Starlight components (`Tabs`, `LinkCard`, `CardGrid`, `Aside` as a
+  component, `Steps`, etc.).
+- For prose asides, prefer the Markdown-native `:::note` /
+  `:::tip` / `:::caution` / `:::danger` syntax over `<Aside>`. Both
+  render the same; the prose form keeps Markdown files readable in
+  plain editors.
+- Cross-link to the most relevant troubleshooting / setup page on
+  any step that has a known failure mode (DB step → Database errors
+  + Could not find driver, write-perms step → Browser freeze /
+  Cloudflare, etc.). Cross-link asides are not optional polish —
+  they're the difference between "you're stuck" and "click here".
+- Internal links use **absolute paths** with a trailing slash:
+  `[Quickstart](/getting-started/quickstart/)`. Starlight's link
+  resolver rewrites these onto the configured `base`.
+- External links open in the same tab; Starlight applies
+  `rel="noopener"` + an external-link affordance automatically.
+- Code-block languages use Shiki names (`sh`, `php`, `sql`, `ini`,
+  `yaml`, `json`, `text`). For SourceMod KeyValues files, use `ini`
+  — it's structurally close enough to highlight cleanly.
+- Headings: each page has exactly one `# H1` (set via the
+  front-matter `title`); body content starts at `## H2`. Skipping
+  levels (e.g. `## H2` → `#### H4`) breaks Starlight's auto-ToC.
+
+## Source of truth
+
+These docs live in [`sbpp/sourcebans-pp` under `docs/`](https://github.com/sbpp/sourcebans-pp/tree/main/docs).
+The site at <https://sbpp.github.io/> is published from there by CI
+on every merge to `main`. Open PRs against this directory; the deploy
+shell repo doesn't accept content PRs anymore.

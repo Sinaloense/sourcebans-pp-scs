@@ -1,100 +1,98 @@
 <h1 align="center">
-    <a href="https://sbpp.github.io"><img src="https://raw.githubusercontent.com/sbpp/sourcebans-pp/v1.x/.github/logo.png" height="25%" width="25%"/></a>
+    <a href="https://sbpp.github.io"><img src="https://raw.githubusercontent.com/sbpp/sourcebans-pp/main/web/themes/default/images/favicon.svg" height="25%" width="25%"/></a>
     <br/>
     SourceBans++
 </h1>
 
-### [![GitHub release](https://img.shields.io/github/release/sbpp/sourcebans-pp.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/sbpp/sourcebans-pp/releases) [![License: CC BY-SA 4.0](https://img.shields.io/badge/License-CC_BY--SA_4.0-blue.svg)](https://github.com/sbpp/sourcebans-pp/blob/php81/LICENSE.md) [![GitHub issues](https://img.shields.io/github/issues/sbpp/sourcebans-pp.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/sbpp/sourcebans-pp/issues) [![GitHub pull requests](https://img.shields.io/github/issues-pr/sbpp/sourcebans-pp.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/sbpp/sourcebans-pp/pulls) [![GitHub All Releases](https://img.shields.io/github/downloads/sbpp/sourcebans-pp/total.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/sbpp/sourcebans-pp/releases) [![Discord](https://img.shields.io/discord/298914017135689728.svg?style=flat-square&logo=discord&label=discord)](https://discord.gg/4Bhj6NU)
+<p align="center">
+  <a href="https://github.com/sbpp/sourcebans-pp/releases"><img src="https://img.shields.io/github/release/sbpp/sourcebans-pp.svg?style=flat-square&logo=github&logoColor=white" alt="GitHub release"></a>
+  <a href="LICENSE.txt"><img src="https://img.shields.io/badge/License-Elastic_2.0-0080FF.svg" alt="License: Elastic 2.0"></a>
+  <a href="https://github.com/sbpp/sourcebans-pp/issues"><img src="https://img.shields.io/github/issues/sbpp/sourcebans-pp.svg?style=flat-square&logo=github&logoColor=white" alt="GitHub issues"></a>
+  <a href="https://github.com/sbpp/sourcebans-pp/releases"><img src="https://img.shields.io/github/downloads/sbpp/sourcebans-pp/total.svg?style=flat-square&logo=github&logoColor=white" alt="GitHub All Releases"></a>
+  <a href="https://discord.gg/tzqYqmAtF5"><img src="https://img.shields.io/discord/298914017135689728.svg?style=flat-square&logo=discord&label=discord" alt="Discord"></a>
+</p>
 
+Global admin, ban, and communication management system for the Source
+engine.
 
-Global admin, ban, and communication management system for the Source engine
+> [!TIP]
+> **Rather not self-host?** [**RookHelm**](https://rookhelm.com?utm_source=sourcebans-pp&utm_medium=referral&utm_content=readme) is a
+> commercial, fully-hosted alternative to SourceBans++ with more
+> moderation tooling built in. It runs the whole stack for you and
+> imports your existing SourceBans++ data. SourceBans++ itself stays
+> free and self-hostable, always.
 
-### Issues
-If you have an issue you can report it [here](https://github.com/sbpp/sourcebans-pp/issues/new).
-To solve your problems as fast as possible fill out the **issue template** provided
-or read how to report issues effectively [here](https://coenjacobs.me/2013/12/06/effective-bug-reports-on-github/).
+## Links
 
-### Useful Links
+- **Docs:** <https://sbpp.github.io/> (install, upgrade, configure, FAQ)
+- **Releases:** <https://github.com/sbpp/sourcebans-pp/releases>
+- **Issues:** <https://github.com/sbpp/sourcebans-pp/issues>
+- **Discord:** <https://discord.gg/tzqYqmAtF5>
+- **AlliedModders thread:** <https://forums.alliedmods.net/showthread.php?p=2303384>
 
-* Website: [SourceBans++](https://sbpp.github.io/)
-* Install help: [SourceBans++ Docs](https://sbpp.github.io/docs/)
-* FAQ: [SourceBans++ FAQ](https://sbpp.github.io/faq/)
-* Forum Thread: [SourceBans++ - AlliedModders](https://forums.alliedmods.net/showthread.php?p=2303384)
-* Discord Server: [SourceBans++ - Discord](https://discord.gg/4Bhj6NU)
+## Install
 
-### Requirements
+Download the latest `sourcebans-pp-X.Y.Z.webpanel-only.zip` from
+[Releases](https://github.com/sbpp/sourcebans-pp/releases), unzip into
+your web root, and visit `/install/` in a browser. The wizard walks
+you through the rest.
 
-```
-* Webserver
-  o PHP 8.2 or higher
-    * ini setting: memory_limit greater than or equal to 64M
-    * GMP extension
-  o MySQL 5.6 or MariaDB 10 and higher
-* Source Dedicated Server
-  o MetaMod: Source
-  o SourceMod: Greater Than or Equal To 1.11
-```
+Full install + plugin setup guide:
+[**Quickstart**](https://sbpp.github.io/getting-started/quickstart/).
 
-## How to install a SourceBans++ release version
-
-The easiest way of installing SourceBans++ is to use a [release version](https://github.com/sbpp/sourcebans-pp/releases), since 
-those come bundled with all requiered code dependencies and pre-compiled sourcemod plugins.
-
-The [quickstart](https://sbpp.github.io/docs/quickstart/) guide gives you a detailed walktrough of the installation process.
-
-## How to install the current master branch version
-
-The master branch doesn't include the required dependencies or compiled plugins you need to run SourceBans++.
-Here is a quick summary of getting the master branch code up and running.
-
-### Installing webpanel dependencies
-- Follow the [quickstart](https://sbpp.github.io/docs/quickstart/) guide and upload the webpanel files to your web server
-- Install [composer](https://getcomposer.org/) - [Installation Guide](https://getcomposer.org/doc/00-intro.md#installation-linux-unix-macos)
-- Go to the root of your SourceBans++ installation (where index.php is located)
-- run ```composer install```
-
-After successfully installing all dependencies you can procede with the [quickstart](https://sbpp.github.io/docs/quickstart/) guide.
-
-### PHP 8.1 major changes
 ## Upgrade
-*If you ran the installer, this step is unnecessary.*
 
-Upgrading from 1.6/1.7, requires a new [configuration value](/blob/php81/web/config.php.template#L43) to be set. To do this, please run the `upgrade.php` script.
-Once done, delete it, as it may output sensitive information.
-
-#### Smarty
-#### Updated Smarty version dropped support for the `{php}` tag. 
-Custom themes must use the new [`{load_template}`](https://github.com/sbpp/sourcebans-pp/blob/php81/web/includes/SmartyCustomFunctions.php#L54) tag.
-
-#### JWT Update
-*If you ran the installer or upgrade file, this step is unecessary.* \
-JWT secrets are no longer stored in the database as they are generated using a secret key. 
-
-
-### Compiling SourceMod plugins
-Follow the Guide '[Compiling SourceMod Plugins](https://wiki.alliedmods.net/Compiling_SourceMod_Plugins)' from the official SourceMod Wiki
-
-## Built With
-
-* [SourceMod](http://www.sourcemod.net/) - Scripting platform for the Source Engine - [License](https://raw.githubusercontent.com/sbpp/sourcebans-pp/v1.x/.github/SOURCEMOD-LICENSE.txt) - [GPL v3](https://raw.githubusercontent.com/sbpp/sourcebans-pp/v1.x/.github/GPLv3)
-* [SourceBans 1.4.11](https://github.com/GameConnect/sourcebansv1) - Base of this project - [GPL v3](https://raw.githubusercontent.com/sbpp/sourcebans-pp/v1.x/.github/GPLv3) - [CC BY-NC-SA 3.0](https://github.com/sbpp/sourcebans-pp/blob/v1.x/LICENSE)
-* [SourceComms](https://github.com/d-ai/SourceComms) - [GPL v3](https://raw.githubusercontent.com/sbpp/sourcebans-pp/v1.x/.github/GPLv3)
-* [SourceBans TF2 Theme](https://forums.alliedmods.net/showthread.php?t=252533)
+[**Updating SourceBans++**](https://sbpp.github.io/updating/) covers
+the upgrade path for each major version boundary.
 
 ## Contributing
 
-Please read [CONTRIBUTING.md](https://github.com/sbpp/sourcebans-pp/blob/v1.x/CONTRIBUTING.md) for details on our code of conduct, and the process for submitting pull requests to us. Read [SECURITY.md](https://github.com/sbpp/sourcebans-pp/blob/v1.x/SECURITY.md) if you have a Security Bug in SourceBans++
+Pull requests welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
+guide, [`AGENTS.md`](AGENTS.md) for conventions and the local Docker
+dev stack, and [`ARCHITECTURE.md`](ARCHITECTURE.md) for the codebase
+tour.
 
-## Authors
+PRs that touch the web panel (`web/**`) are covered by a Contributor
+License Agreement; see [`CLA.md`](CLA.md). The CLA bot leaves
+one-line sign instructions on your first such PR; you only need to
+sign once. Plugin-only PRs (`game/addons/sourcemod/**`) stay under
+GPLv3 and don't need a signature.
 
-* **GameConnect** - *Initial Work / SourceBans* - [GameConnect](https://www.gameconnect.net/)
-* **Sarabveer Singh** - *Initial Work on SourceBans++* - [Sarabveer](https://github.com/Sarabveer)
-* **Alexander Trost** - *Continuing Development on SourceBans++* - [Galexrt](https://github.com/galexrt)
-* **Marvin Lukaschek** - *Continuing Development on SourceBans++* - [Groruk](https://github.com/groruk)
+Security issues: please open an issue with reproduction details, or
+contact a maintainer on Discord if the report needs to be private.
 
-See also the list of [contributors](https://github.com/sbpp/sourcebans-pp/graphs/contributors) who participated in this project.
+## Sponsors
+
+SourceBans++ is built and maintained on volunteer time. If your
+community, server network, or hosting business depends on it,
+sponsoring development helps keep the panel healthy and funds the
+modernization work landing across v2.x.
+
+[![Sponsor on GitHub](https://img.shields.io/github/sponsors/sbpp?style=flat-square&logo=github&label=Sponsor%20on%20GitHub)](https://github.com/sponsors/sbpp)
+
+**Game-server hosts offering the panel as a hosted or managed
+service to third parties:** that use case is reserved by the
+Elastic License 2.0 and covered by a separate commercial license;
+see **License** below.
+
+<!-- sponsors:start -->
+<!-- Corporate sponsor logos land here once the corporate tier ships. -->
+<!-- sponsors:end -->
 
 ## License
 
-This SourceMod plugins of this project are licensed under the `GNU GENERAL PUBLIC LICENSE Version 3` (GPLv3) [License](https://raw.githubusercontent.com/sbpp/sourcebans-pp/v1.x/.github/GPLv3).
-The Web panel is licensed under the `Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported` (CC BY-NC-SA 3.0) [License](https://github.com/sbpp/sourcebans-pp/blob/v1.x/LICENSE).
+- **Web panel** (everything under `web/`): [Elastic License 2.0](LICENSE.txt).
+  You may use, copy, modify, create derivative works of, and
+  redistribute the panel for hobby use, community use, running it
+  for your own clan / network, bundling it into a Docker image,
+  publishing a Pterodactyl egg, or packaging it for a distro. What
+  ELv2 reserves is the right to **provide the panel as a hosted
+  or managed service to third parties**; for that, a separate
+  commercial license is available. For commercial licensing
+  inquiries, reach out on the
+  [Discord](https://discord.gg/tzqYqmAtF5).
+- **SourceMod plugins** (everything under `game/addons/sourcemod/`):
+  [GPLv3](LICENSE-plugins.txt).
+- **Vendored third-party code** (LightOpenID, TinyMCE, the
+  SourceBans 1.4.x lineage, etc.) keeps its own license terms; see
+  [`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt).

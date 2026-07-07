@@ -1,21 +1,7 @@
 <?php
-/*************************************************************************
-This file is part of SourceBans++
-
-SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
-
-The SourceBans++ Web panel is licensed under a
-Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
-
-You should have received a copy of the license along with this
-work.  If not, see <http://creativecommons.org/licenses/by-nc-sa/3.0/>.
-
-This program is based off work covered by the following copyright(s):
-SourceBans 1.4.11
-Copyright © 2007-2014 SourceBans Team - Part of GameConnect
-Licensed under CC-BY-NC-SA 3.0
-Page: <http://www.sourcebans.net/> - <http://www.gameconnect.net/>
-*************************************************************************/
+// SourceBans++ (c) 2014-2026 SourceBans++ Dev Team
+// Licensed under the Elastic License 2.0.
+// See LICENSE.txt for the full license text and THIRD-PARTY-NOTICES.txt for attributions.
 
 if (!defined("IN_SB")) {
     echo "You should not be here. Only follow links!";
@@ -29,7 +15,9 @@ new AdminTabs([], $userbank, $theme);
 $sid = (int) $_GET['id'];
 
 // Access on that server?
-$servers = $GLOBALS['db']->GetAll("SELECT `server_id`, `srv_group_id` FROM " . DB_PREFIX . "_admins_servers_groups WHERE admin_id = " . $userbank->GetAid());
+$GLOBALS['PDO']->query("SELECT `server_id`, `srv_group_id` FROM `:prefix_admins_servers_groups` WHERE admin_id = :aid");
+$GLOBALS['PDO']->bind(':aid', $userbank->GetAid());
+$servers = $GLOBALS['PDO']->resultset();
 $access  = false;
 foreach ($servers as $server) {
     if ($server['server_id'] == $sid) {
@@ -37,7 +25,9 @@ foreach ($servers as $server) {
         break;
     }
     if ($server['srv_group_id'] > 0) {
-        $servers_in_group = $GLOBALS['db']->GetAll("SELECT `server_id` FROM " . DB_PREFIX . "_servers_groups WHERE group_id = " . (int) $server['srv_group_id']);
+        $GLOBALS['PDO']->query("SELECT `server_id` FROM `:prefix_servers_groups` WHERE group_id = :gid");
+        $GLOBALS['PDO']->bind(':gid', (int) $server['srv_group_id']);
+        $servers_in_group = $GLOBALS['PDO']->resultset();
         foreach ($servers_in_group as $servig) {
             if ($servig['server_id'] == $sid) {
                 $access = true;

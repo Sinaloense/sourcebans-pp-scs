@@ -1,0 +1,113 @@
+<?php
+// SourceBans++ (c) 2014-2026 SourceBans++ Dev Team
+// Licensed under the Elastic License 2.0.
+// See LICENSE.txt for the full license text and THIRD-PARTY-NOTICES.txt for attributions.
+
+/*
+ * SourceMod command/group override editor — extracted from
+ * admin.admins.php during the #1123 B17 single-template redesign so
+ * the overrides "tab" has a single PHP handler, a single
+ * `Sbpp\View\AdminOverridesView` DTO, and a single `.tpl`.
+ * admin.admins.php still routes here via a top-level `require`, so the
+ * existing `?p=admin&c=admins` URL keeps its three-tab layout.
+ *
+ * The save/delete/duplicate-check logic below is the verbatim block
+ * that used to live at the bottom of admin.admins.php; the move is
+ * mechanical so behaviour parity (incl. error messages and the
+ * delete-by-blanking-name UX) is preserved.
+ */
+
+if (!defined("IN_SB")) {
+    echo "You should not be here. Only follow links!";
+    die();
+}
+
+global $userbank, $theme;
+
+$overrides_error        = "";
+$overrides_save_success = false;
+
+try {
+    if (isset($_POST['new_override_name'])) {
+        if (isset($_POST['override_id'])) {
+            $edit_errors = "";
+            foreach ($_POST['override_id'] as $index => $id) {
+                if ($_POST['override_type'][$index] != "command" && $_POST['override_type'][$index] != "group") {
+                    continue;
+                }
+
+                $id = (int) $id;
+                if (empty($_POST['override_name'][$index])) {
+                    $GLOBALS['PDO']->query("DELETE FROM `:prefix_overrides` WHERE id = :id");
+                    $GLOBALS['PDO']->bind(':id', $id);
+                    $GLOBALS['PDO']->execute();
+                    continue;
+                }
+
+                $chk = $GLOBALS['PDO']->query("SELECT id FROM `:prefix_overrides` WHERE name = ? AND type = ? AND id != ?")->resultset([
+                    $_POST['override_name'][$index],
+                    $_POST['override_type'][$index],
+                    $id,
+                ]);
+                if (!empty($chk)) {
+                    $edit_errors .= "&bull; There already is an override with name \\\"" . htmlspecialchars(addslashes($_POST['override_name'][$index])) . "\\\" from the selected type.<br />";
+                    continue;
+                }
+
+                $GLOBALS['PDO']->query("UPDATE `:prefix_overrides` SET name = ?, type = ?, flags = ? WHERE id = ?")->execute([
+                    $_POST['override_name'][$index],
+                    $_POST['override_type'][$index],
+                    trim((string) ($_POST['override_flags'][$index] ?? '')),
+                    $id,
+                ]);
+            }
+
+            if (!empty($edit_errors)) {
+                throw new Exception("There were errors applying your changes:<br /><br />" . $edit_errors);
+            }
+        }
+
+        if (!empty($_POST['new_override_name'])) {
+            if ($_POST['new_override_type'] != "command" && $_POST['new_override_type'] != "group") {
+                throw new Exception("Invalid override type.");
+            }
+
+            $chk = $GLOBALS['PDO']->query("SELECT id FROM `:prefix_overrides` WHERE name = ? AND type = ?")->resultset([
+                $_POST['new_override_name'],
+                $_POST['new_override_type'],
+            ]);
+            if (!empty($chk)) {
+                throw new Exception("There already is an override with that name from the selected type.");
+            }
+
+            $GLOBALS['PDO']->query("INSERT INTO `:prefix_overrides` (type, name, flags) VALUES (?, ?, ?)")->execute([
+                $_POST['new_override_type'],
+                $_POST['new_override_name'],
+                trim((string) ($_POST['new_override_flags'] ?? '')),
+            ]);
+        }
+
+        $overrides_save_success = true;
+    }
+} catch (Exception $e) {
+    $overrides_error = $e->getMessage();
+}
+
+$overrides_rows = $GLOBALS['PDO']->query("SELECT id, type, name, flags FROM `:prefix_overrides`")->resultset();
+
+// Carry both the historical `id`/`name` keys and the `oid`/`command_or_group`
+// aliases on each row so any third-party theme that forked the
+// pre-v2.0.0 default reads the same DTO as the shipped template.
+$overrides_list = [];
+foreach ($overrides_rows as $row) {
+    $row['oid']              = (int) $row['id'];
+    $row['command_or_group'] = (string) $row['name'];
+    $overrides_list[]        = $row;
+}
+
+\Sbpp\View\Renderer::render($theme, new \Sbpp\View\AdminOverridesView(
+    permission_addadmin: $userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::AddAdmins)),
+    overrides_error: $overrides_error,
+    overrides_save_success: $overrides_save_success,
+    overrides_list: $overrides_list,
+));

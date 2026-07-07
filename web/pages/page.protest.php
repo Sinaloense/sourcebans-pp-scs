@@ -1,21 +1,7 @@
 <?php
-/*************************************************************************
-This file is part of SourceBans++
-
-SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
-
-The SourceBans++ Web panel is licensed under a
-Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
-
-You should have received a copy of the license along with this
-work.  If not, see <http://creativecommons.org/licenses/by-nc-sa/3.0/>.
-
-This program is based off work covered by the following copyright(s):
-SourceBans 1.4.11
-Copyright © 2007-2014 SourceBans Team - Part of GameConnect
-Licensed under CC-BY-NC-SA 3.0
-Page: <http://www.sourcebans.net/> - <http://www.gameconnect.net/>
-*************************************************************************/
+// SourceBans++ (c) 2014-2026 SourceBans++ Dev Team
+// Licensed under the Elastic License 2.0.
+// See LICENSE.txt for the full license text and THIRD-PARTY-NOTICES.txt for attributions.
 
 use Sbpp\Mail\EmailType;
 use Sbpp\Mail\Mail;
@@ -24,7 +10,7 @@ use Sbpp\Mail\Mailer;
 global $userbank, $theme;
 
 if (!Config::getBool('config.enableprotest')) {
-    print "<script>ShowBox('Error', 'This page is disabled. You should not be here.', 'red');</script>";
+    \Sbpp\View\Toast::emit('error', 'Error', 'This page is disabled. You should not be here.');
     PageDie();
 }
 if (!defined("IN_SB")) {
@@ -39,12 +25,12 @@ if (!isset($_POST['subprotest']) || $_POST['subprotest'] != 1) {
     $UnbanReason = "";
     $Email       = "";
 } else {
-    $Type        = (int) $_POST['Type'];
-    $SteamID     = htmlspecialchars($_POST['SteamID']);
-    $IP          = htmlspecialchars($_POST['IP']);
-    $PlayerName  = htmlspecialchars($_POST['PlayerName']);
-    $UnbanReason = htmlspecialchars($_POST['BanReason']);
-    $Email       = htmlspecialchars($_POST['EmailAddr']);
+    $Type        = (int) ($_POST['Type']      ?? 0);
+    $SteamID     = (string) ($_POST['SteamID']   ?? '');
+    $IP          = (string) ($_POST['IP']        ?? '');
+    $PlayerName  = (string) ($_POST['PlayerName']?? '');
+    $UnbanReason = (string) ($_POST['BanReason'] ?? '');
+    $Email       = (string) ($_POST['EmailAddr'] ?? '');
     $validsubmit = true;
     $errors      = "";
     $BanId       = -1;
@@ -53,17 +39,18 @@ if (!isset($_POST['subprotest']) || $_POST['subprotest'] != 1) {
         $errors .= '* Please type a valid STEAM ID.<br>';
         $validsubmit = false;
     } elseif ($Type == 0) {
-        $pre = $GLOBALS['db']->Prepare("SELECT bid FROM " . DB_PREFIX . "_bans WHERE authid=? AND RemovedBy IS NULL AND type=0;");
-        $res = $GLOBALS['db']->Execute($pre, array(
-            $SteamID
-        ));
-        if ($res->RecordCount() == 0) {
+        $GLOBALS['PDO']->query("SELECT bid FROM `:prefix_bans` WHERE authid = :authid AND RemovedBy IS NULL AND type = 0");
+        $GLOBALS['PDO']->bind(':authid', $SteamID);
+        $res = $GLOBALS['PDO']->resultset();
+        if (count($res) == 0) {
             $errors .= '* That Steam ID is not banned!<br>';
             $validsubmit = false;
         } else {
-            $BanId = (int) $res->fields[0];
-            $res   = $GLOBALS['db']->Execute("SELECT pid FROM " . DB_PREFIX . "_protests WHERE bid=$BanId");
-            if ($res->RecordCount() > 0) {
+            $BanId = (int) $res[0]['bid'];
+            $GLOBALS['PDO']->query("SELECT pid FROM `:prefix_protests` WHERE bid = :bid");
+            $GLOBALS['PDO']->bind(':bid', $BanId);
+            $res   = $GLOBALS['PDO']->resultset();
+            if (count($res) > 0) {
                 $errors .= '* A protest is already pending for this Steam ID.<br>';
                 $validsubmit = false;
             }
@@ -73,17 +60,18 @@ if (!isset($_POST['subprotest']) || $_POST['subprotest'] != 1) {
         $errors .= '* Please type a valid IP.<br>';
         $validsubmit = false;
     } elseif ($Type == 1) {
-        $pre = $GLOBALS['db']->Prepare("SELECT bid FROM " . DB_PREFIX . "_bans WHERE ip=? AND RemovedBy IS NULL AND type=1;");
-        $res = $GLOBALS['db']->Execute($pre, array(
-            $IP
-        ));
-        if ($res->RecordCount() == 0) {
+        $GLOBALS['PDO']->query("SELECT bid FROM `:prefix_bans` WHERE ip = :ip AND RemovedBy IS NULL AND type = 1");
+        $GLOBALS['PDO']->bind(':ip', $IP);
+        $res = $GLOBALS['PDO']->resultset();
+        if (count($res) == 0) {
             $errors .= '* That IP is not banned!<br>';
             $validsubmit = false;
         } else {
-            $BanId = (int) $res->fields[0];
-            $res   = $GLOBALS['db']->Execute("SELECT pid FROM " . DB_PREFIX . "_protests WHERE bid=$BanId");
-            if ($res->RecordCount() > 0) {
+            $BanId = (int) $res[0]['bid'];
+            $GLOBALS['PDO']->query("SELECT pid FROM `:prefix_protests` WHERE bid = :bid");
+            $GLOBALS['PDO']->bind(':bid', $BanId);
+            $res   = $GLOBALS['PDO']->resultset();
+            if (count($res) > 0) {
                 $errors .= '* A protest is already pending for this IP.<br>';
                 $validsubmit = false;
             }
@@ -103,20 +91,33 @@ if (!isset($_POST['subprotest']) || $_POST['subprotest'] != 1) {
     }
 
     if (!$validsubmit) {
-        print "<script>ShowBox('Error', '$errors', 'red');</script>";
+        // Validation errors are accumulated as `* msg<br>` HTML
+        // fragments (legacy ShowBox markup, same shape page.submit.php
+        // uses). Convert `<br>` separators to plain spaces so the
+        // toast body reads as a single line per error — `showToast`
+        // (theme.js) `escapeHtml`s the value so raw tags would
+        // surface as visible literal text.
+        \Sbpp\View\Toast::emit(
+            'error',
+            'Please fix the following',
+            (string) preg_replace('#<br\s*/?>#i', ' ', $errors),
+        );
     }
 
     if ($validsubmit && $BanId != -1) {
         $UnbanReason = trim($UnbanReason);
-        $pre         = $GLOBALS['db']->Prepare("INSERT INTO " . DB_PREFIX . "_protests(bid,datesubmitted,reason,email,archiv,pip) VALUES (?,UNIX_TIMESTAMP(),?,?,0,?)");
-        $res         = $GLOBALS['db']->Execute($pre, array(
-            $BanId,
-            $UnbanReason,
-            $Email,
-            $_SERVER['REMOTE_ADDR']
-        ));
-        $protid      = $GLOBALS['db']->Insert_ID();
-        $protadmin   = $GLOBALS['db']->GetRow("SELECT ad.user FROM " . DB_PREFIX . "_protests p, " . DB_PREFIX . "_admins ad, " . DB_PREFIX . "_bans b WHERE p.pid = '" . $protid . "' AND b.bid = p.bid AND ad.aid = b.aid");
+        $GLOBALS['PDO']->query("INSERT INTO `:prefix_protests`(bid,datesubmitted,reason,email,archiv,pip) VALUES (:bid,UNIX_TIMESTAMP(),:reason,:email,0,:pip)");
+        $GLOBALS['PDO']->bindMultiple([
+            ':bid'    => $BanId,
+            ':reason' => $UnbanReason,
+            ':email'  => $Email,
+            ':pip'    => $_SERVER['REMOTE_ADDR'],
+        ]);
+        $GLOBALS['PDO']->execute();
+        $protid    = $GLOBALS['PDO']->lastInsertId();
+        $GLOBALS['PDO']->query("SELECT ad.user FROM `:prefix_protests` p, `:prefix_admins` ad, `:prefix_bans` b WHERE p.pid = :pid AND b.bid = p.bid AND ad.aid = b.aid");
+        $GLOBALS['PDO']->bind(':pid', $protid);
+        $protadmin = $GLOBALS['PDO']->single();
 
         $Type        = 0;
         $SteamID     = "";
@@ -128,16 +129,19 @@ if (!isset($_POST['subprotest']) || $_POST['subprotest'] != 1) {
         // Send an email when protest was posted
         $headers = 'From: ' . SB_EMAIL . "\n" . 'X-Mailer: PHP/' . phpversion();
 
-        $emailinfo = $GLOBALS['db']->Execute("SELECT aid, user, email FROM `" . DB_PREFIX . "_admins` WHERE aid = (SELECT aid FROM `" . DB_PREFIX . "_bans` WHERE bid = '" . (int) $BanId . "');");
-        $requri    = substr($_SERVER['REQUEST_URI'], 0, strrpos($_SERVER['REQUEST_URI'], ".php") + 4);
-        if (Config::getBool('protest.emailonlyinvolved') && !empty($emailinfo->fields['email'])) {
-            $admins = array(
-                array(
-                    'aid' => $emailinfo->fields['aid'],
-                    'user' => $emailinfo->fields['user'],
-                    'email' => $emailinfo->fields['email']
-                )
-            );
+        $GLOBALS['PDO']->query("SELECT aid, user, email FROM `:prefix_admins` WHERE aid = (SELECT aid FROM `:prefix_bans` WHERE bid = :bid)");
+        $GLOBALS['PDO']->bind(':bid', (int) $BanId);
+        $emailinfo = $GLOBALS['PDO']->single();
+        $requestUri = (string) ($_SERVER['REQUEST_URI'] ?? '');
+        $requri    = substr($requestUri, 0, (int) strrpos($requestUri, ".php") + 4);
+        if (Config::getBool('protest.emailonlyinvolved') && !empty($emailinfo['email'])) {
+            $admins = [
+                [
+                    'aid'   => $emailinfo['aid'],
+                    'user'  => $emailinfo['user'],
+                    'email' => $emailinfo['email'],
+                ],
+            ];
         } else {
             $admins = $userbank->GetAllAdmins();
         }
@@ -145,7 +149,7 @@ if (!isset($_POST['subprotest']) || $_POST['subprotest'] != 1) {
         $destAdmins = [];
 
         foreach ($admins as $admin) {
-            if ($userbank->HasAccess(ADMIN_OWNER | ADMIN_BAN_PROTESTS, $admin['aid']) && $userbank->HasAccess(ADMIN_NOTIFY_PROTEST, $admin['aid'])) {
+            if ($userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::BanProtests), $admin['aid']) && $userbank->HasAccess(WebPermission::NotifyProtest, $admin['aid'])) {
                 $destAdmins [] = $admin['email'];
             }
         }
@@ -158,29 +162,24 @@ if (!isset($_POST['subprotest']) || $_POST['subprotest'] != 1) {
                 '{steamid}' => $_POST['SteamID'],
                 '{banadmin}' => $protadmin['user'],
                 '{message}' => $_POST['BanReason'],
-                '{link}' => Host::complete(true) . '/index.php?p=admin&c=bans#%5E1',
+                // #1275 — admin-bans is Pattern A; the legacy `#^1`
+                // anchor that targeted the old page-toc chrome is no
+                // longer wired. Link directly to the protests section
+                // so the email recipient lands on the queue they're
+                // being asked to review.
+                '{link}' => Host::complete(true) . '/index.php?p=admin&c=bans&section=protests',
                 '{home}' => Host::complete(true)
             ]);
         }
 
-        echo "<script>ShowBox('Successful', 'Your protest has been sent.', 'green');</script>";
+        \Sbpp\View\Toast::emit('success', 'Successful', 'Your protest has been sent.');
     }
 }
 
-$theme->assign('steam_id', $SteamID);
-$theme->assign('ip', $IP);
-$theme->assign('player_name', $PlayerName);
-$theme->assign('reason', $UnbanReason);
-$theme->assign('player_email', $Email);
-
-$theme->display('page_protestban.tpl');
-?>
-<script type="text/javascript">
-function changeType(szListValue)
-{
-    $('steam.row').style.display = (szListValue == "0" ? "" : "none");
-    $('ip.row').style.display    = (szListValue == "1" ? "" : "none");
-}
-$('Type').options[<?=$Type;?>].selected = true;
-changeType(<?=$Type?>);
-</script>
+\Sbpp\View\Renderer::render($theme, new \Sbpp\View\ProtestBanView(
+    steam_id: (string) $SteamID,
+    ip: (string) $IP,
+    player_name: (string) $PlayerName,
+    reason: (string) $UnbanReason,
+    player_email: (string) $Email,
+));

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Runs once, the first time the MariaDB volume is initialized.
+#
+# The repo ships SQL templates with `{prefix}` and `{charset}` placeholders
+# (see web/install/includes/sql/struc.sql + data.sql). The web installer
+# normally substitutes these and pipes them in. We do the same here so the
+# panel comes up fully provisioned, no installer wizard required.
+#
+# Variables expected from the compose env:
+#   MYSQL_DATABASE, DB_PREFIX (default sb), DB_CHARSET (default utf8mb4)
+
+set -euo pipefail
+
+PREFIX="${DB_PREFIX:-sb}"
+CHARSET="${DB_CHARSET:-utf8mb4}"
+DATABASE="${MYSQL_DATABASE:-sourcebans}"
+
+SQL_DIR="/sbpp-sql"
+TMP="$(mktemp -d)"
+trap 'rm -rf "${TMP}"' EXIT
+
+echo "[db-init] rendering schema (prefix=${PREFIX}, charset=${CHARSET}) into ${DATABASE}"
+
+render() {
+    local src="$1" dst="$2"
+    sed -e "s/{prefix}/${PREFIX}/g" -e "s/{charset}/${CHARSET}/g" "${src}" >"${dst}"
+}
+
+render "${SQL_DIR}/struc.sql" "${TMP}/struc.sql"
+render "${SQL_DIR}/data.sql"  "${TMP}/data.sql"
+
+# MariaDB's init dir runs us with the OS user `mysql`, not connected as root,
+# so we authenticate explicitly. Either MARIADB_ROOT_PASSWORD or
+# MYSQL_ROOT_PASSWORD will be set by the image.
+ROOT_PW="${MARIADB_ROOT_PASSWORD:-${MYSQL_ROOT_PASSWORD:-}}"
+export MYSQL_PWD="${ROOT_PW}"
+MYSQL=(mariadb -uroot --database="${DATABASE}")
+
+"${MYSQL[@]}" <"${TMP}/struc.sql"
+"${MYSQL[@]}" <"${TMP}/data.sql"
+
+# Seed a default admin so the panel is usable immediately.
+#   user: admin
+#   pass: admin
+# Hash is bcrypt of "admin" — generated once and pinned so we don't need PHP
+# in the DB container. Regenerate with:
+#   php -r 'echo password_hash("admin", PASSWORD_BCRYPT), "\n";'
+ADMIN_HASH='$2b$10$6wTXM7nLGr6k7uvVr09Yr.9TLOgMd/pU0uNBWLzeP2cfwMYCV5W2q'
+
+"${MYSQL[@]}" <<SQL
+INSERT INTO \`${PREFIX}_admins\`
+    (user, authid, password, gid, email, validate, extraflags, immunity)
+VALUES
+    ('admin', 'STEAM_0:0:0', '${ADMIN_HASH}', -1, 'admin@example.test', NULL, 16777216, 100);
+SQL
+
+# `./sbpp.sh test` and `./sbpp.sh e2e` run their fixtures as the
+# `${MYSQL_USER}` user against dedicated `sourcebans_test` and
+# `sourcebans_e2e` databases respectively, both of which the fixture
+# drops + recreates between runs. By default the user only has rights
+# on the panel DB, which breaks the fixture with `Access denied`.
+# Mirror the GRANT that .github/workflows/test.yml does so both gates
+# work out of the box on a fresh dev stack.
+PANEL_USER="${MYSQL_USER:-sourcebans}"
+mariadb -uroot <<SQL
+GRANT ALL PRIVILEGES ON \`sourcebans_test\`.* TO '${PANEL_USER}'@'%';
+GRANT ALL PRIVILEGES ON \`sourcebans_e2e\`.*  TO '${PANEL_USER}'@'%';
+GRANT CREATE, DROP ON *.* TO '${PANEL_USER}'@'%';
+FLUSH PRIVILEGES;
+SQL
+
+echo "[db-init] done — admin / admin is ready"

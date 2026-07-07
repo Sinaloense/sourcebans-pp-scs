@@ -1,133 +1,258 @@
 <?php
-/*************************************************************************
-This file is part of SourceBans++
-
-SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
-
-The SourceBans++ Web panel is licensed under a
-Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
-
-You should have received a copy of the license along with this
-work.  If not, see <http://creativecommons.org/licenses/by-nc-sa/3.0/>.
-
-This program is based off work covered by the following copyright(s):
-SourceBans 1.4.11
-Copyright © 2007-2014 SourceBans Team - Part of GameConnect
-Licensed under CC-BY-NC-SA 3.0
-Page: <http://www.sourcebans.net/> - <http://www.gameconnect.net/>
-*************************************************************************/
+// SourceBans++ (c) 2014-2026 SourceBans++ Dev Team
+// Licensed under the Elastic License 2.0.
+// See LICENSE.txt for the full license text and THIRD-PARTY-NOTICES.txt for attributions.
 
 if (!defined("IN_SB")) {
     echo "You should not be here. Only follow links!";
     die();
 }
 
-global $theme;
+global $userbank, $theme;
 
 new AdminTabs([], $userbank, $theme);
 
+/**
+ * Emits an inline `<script>` that surfaces a toast via
+ * `window.SBPP.showToast` (theme.js) with `sb.message.*` (sb.js) as a
+ * fallback, then redirects after a short delay. Replaces the v1.x-era
+ * `<script>ShowBox(…)</script>` calls (the legacy bulk JS file is gone
+ * since v2.0.0).
+ *
+ * The strings are JSON-encoded so embedded quotes / newlines / non-ASCII
+ * survive the round-trip into the script body without further escaping.
+ */
+function emitEditBanToastAndRedirect(string $kind, string $title, string $body, string $redirect): void
+{
+    $kindJs = json_encode($kind, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+    $titleJs = json_encode($title, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+    $bodyJs = json_encode($body, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+    $redirectJs = json_encode($redirect, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+    echo <<<HTML
+<script>
+(function () {
+    var kind = {$kindJs};
+    var title = {$titleJs};
+    var body = {$bodyJs};
+    var redirect = {$redirectJs};
+    var SBPP = window.SBPP;
+    if (SBPP && typeof SBPP.showToast === 'function') {
+        SBPP.showToast({ kind: kind === 'red' ? 'error' : kind === 'green' ? 'success' : kind, title: title, body: body });
+    } else if (window.sb && window.sb.message) {
+        var fn = (kind === 'red') ? window.sb.message.error
+            : (kind === 'green') ? window.sb.message.success
+            : window.sb.message.info;
+        if (typeof fn === 'function') fn(title, body, redirect);
+    }
+    if (redirect) {
+        setTimeout(function () { window.location.href = redirect; }, 1500);
+    }
+})();
+</script>
+HTML;
+}
+
 if ($_GET['key'] != $_SESSION['banlist_postkey']) {
-    echo '<script>ShowBox("Error", "Possible hacking attempt (URL Key mismatch)!", "red", "index.php?p=admin&c=bans");</script>';
+    emitEditBanToastAndRedirect('red', 'Error', 'Possible hacking attempt (URL Key mismatch)!', 'index.php?p=admin&c=bans');
     PageDie();
 }
 if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
-    echo '<script>ShowBox("Error", "No ban id specified. Please only follow links!", "red", "index.php?p=admin&c=bans");</script>';
+    emitEditBanToastAndRedirect('red', 'Error', 'No ban id specified. Please only follow links!', 'index.php?p=admin&c=bans');
+    PageDie();
+}
+$_GET['id'] = (int) $_GET['id'];
+
+// Native PDO prepares (#1175 / Slice 3) reject the same named placeholder
+// reused across positions, so split the bid lookup into two distinct
+// names and bind both. The subquery's `:demo_bid` and the outer
+// `:bid` both pull from `$_GET['id']`, which is already int-cast above.
+$GLOBALS['PDO']->query("
+    				SELECT bid, ba.ip, ba.type, ba.authid, ba.name, created, ends, length, reason, ba.aid, ba.sid AS ba_sid, ad.user, ad.gid, CONCAT(se.ip,':',se.port) AS server_addr, se.sid AS se_sid, mo.icon, (SELECT origname FROM `:prefix_demos` WHERE UPPER(demtype) = 'B' AND demid = :demo_bid) AS dname
+    				FROM `:prefix_bans` AS ba
+    				LEFT JOIN `:prefix_admins` AS ad ON ba.aid = ad.aid
+    				LEFT JOIN `:prefix_servers` AS se ON se.sid = ba.sid
+    				LEFT JOIN `:prefix_mods` AS mo ON mo.mid = se.modid
+    				WHERE bid = :bid");
+$GLOBALS['PDO']->bind(':bid', $_GET['id']);
+$GLOBALS['PDO']->bind(':demo_bid', $_GET['id']);
+$res = $GLOBALS['PDO']->single();
+
+isset($_GET["page"]) ? $pagelink = "&page=" . urlencode($_GET["page"]) : $pagelink = "";
+
+if (!$res) {
+    emitEditBanToastAndRedirect('red', 'Error', 'There was an error getting details. Maybe the ban has been deleted?', 'index.php?p=banlist' . $pagelink);
     PageDie();
 }
 
-$res = $GLOBALS['db']->GetRow("
-    				SELECT bid, ba.ip, ba.type, ba.authid, ba.name, created, ends, length, reason, ba.aid, ba.sid, ad.user, ad.gid, CONCAT(se.ip,':',se.port), se.sid, mo.icon, (SELECT origname FROM " . DB_PREFIX . "_demos WHERE demtype = 'b' AND demid = {$_GET['id']})
-    				FROM " . DB_PREFIX . "_bans AS ba
-    				LEFT JOIN " . DB_PREFIX . "_admins AS ad ON ba.aid = ad.aid
-    				LEFT JOIN " . DB_PREFIX . "_servers AS se ON se.sid = ba.sid
-    				LEFT JOIN " . DB_PREFIX . "_mods AS mo ON mo.mid = se.modid
-    				WHERE bid = {$_GET['id']}");
+$canEditBan = (bool) $userbank->HasAccess(WebPermission::mask(WebPermission::Owner, WebPermission::EditAllBans))
+    || ($userbank->HasAccess(WebPermission::EditOwnBans) && $res['aid'] == $userbank->GetAid())
+    || ($userbank->HasAccess(WebPermission::EditGroupBans) && $res['gid'] == $userbank->GetProperty('gid'));
 
-if (!$userbank->HasAccess(ADMIN_OWNER | ADMIN_EDIT_ALL_BANS) && (!$userbank->HasAccess(ADMIN_EDIT_OWN_BANS) && $res[8] != $userbank->GetAid()) && (!$userbank->HasAccess(ADMIN_EDIT_GROUP_BANS) && $res->fields['gid'] != $userbank->GetProperty('gid'))) {
-    echo '<script>ShowBox("Error", "You don\'t have access to this!", "red", "index.php?p=admin&c=bans");</script>';
+if (!$canEditBan) {
+    emitEditBanToastAndRedirect('red', 'Error', "You don't have access to this!", 'index.php?p=admin&c=bans');
     PageDie();
 }
 
-isset($_GET["page"]) ? $pagelink = "&page=" . $_GET["page"] : $pagelink = "";
+/**
+ * Per-field validation errors collected during the POST step.
+ * Replayed at the bottom of the page by the tail <script>: each entry
+ * sets the matching `<id>.msg` div's textContent + reveals it via
+ * `style.display = 'block'`. Vanilla DOM only — no MooTools `setStyle()`
+ * / `setHTML()` (the v1.x bulk JS file is gone since v2.0.0).
+ *
+ * @var array<string, string> $validationErrors  field id (`name`, `steam`,
+ *     `ip`, `reason`, `length`, `demo`) → message string.
+ */
+$validationErrors = [];
 
-$errorScript = "";
+/** Whether the current POST resulted in a successful UPDATE; drives the
+ *  success toast + redirect emitted by the tail script. */
+$postSuccess = false;
 
 if (isset($_POST['name'])) {
-    $_POST['steam'] = \SteamID\SteamID::toSteam2(trim($_POST['steam']));
-    $_POST['type']  = (int) $_POST['type'];
+    // #1420 follow-up #2 — validate the raw Steam ID shape BEFORE the
+    // `SteamID::toSteam2()` conversion. Pre-fix this surface called
+    // `toSteam2()` on the raw POST value as its first statement; on a
+    // garbage input the converter threw `Invalid SteamID input!` from
+    // `resolveInputID()`, the exception escaped the page handler
+    // unhandled, and the user got a generic 500 page render instead of
+    // the inline "Please enter a valid Steam ID or Community ID"
+    // message on the form. The library tightening (follow-up #1) made
+    // the throw stricter (rejecting the `STEAM_0:0:` / substring-bypass
+    // / embedded-Steam64 shapes the old loose regex used to round-trip
+    // verbatim into the DB) which made the 500 page render strictly
+    // MORE frequent on edit-ban. Validate-before-convert puts the
+    // failure on the form as the same per-field message admin-add /
+    // comms-add use.
+    //
+    // The validate-then-convert order also defends the `ip` branch:
+    // pre-fix the form's `Convert ban from IP to Steam ID` path
+    // legitimately passes an empty `steam` while the user fills `ip`
+    // — `toSteam2('')` returns `false` (the `empty()` short-circuit
+    // in `to()`), so this happened to work, but only as an accident
+    // of how the early-return interacts with `empty($_POST['steam'])`
+    // below. Keep the explicit-then-convert shape so a future
+    // refactor of `to()`'s early-return doesn't silently regress.
+    $rawSteam       = trim((string) ($_POST['steam'] ?? ''));
+    $_POST['type']  = (int) ($_POST['type'] ?? 0);
+    $postBanType    = BanType::tryFrom((int) $_POST['type']) ?? BanType::Steam;
 
     // Form Validation
     $error = 0;
-    // If they didn't type a steamid
-    if (empty($_POST['steam']) && $_POST['type'] == 0) {
+    // Steam ID branch — validate raw shape FIRST; convert only on a
+    // pass. Empty input is its own error message; non-empty-but-bad
+    // is "please enter a valid…".
+    //
+    // #1486: the IP-type branch keeps the Steam ID as a record-of-fact
+    // when the operator filled both fields, instead of dropping it. The
+    // SourceMod plugin enforces an IP ban on the `ip` column ONLY
+    // (sbpp_main.sp: `(type=0 AND authid…) OR (type=1 AND ip…)`), so the
+    // stored authid is inert plugin-side; it exists so the ban detail /
+    // banlist can show which account the IP belonged to. The shape gate
+    // still runs before `toSteam2()` so a garbage value can't escape as
+    // an uncaught Exception (500 page render) — same validate-then-convert
+    // ladder as the Steam branch, mirrored in `api_bans_add`. An empty
+    // Steam ID field on an IP ban records nothing.
+    if ($postBanType === BanType::Steam) {
+        if ($rawSteam === '') {
+            $error++;
+            $validationErrors['steam'] = 'You must type a Steam ID or Community ID';
+            $_POST['steam'] = '';
+        } elseif (!\SteamID\SteamID::isValidID($rawSteam)) {
+            $error++;
+            $validationErrors['steam'] = 'Please enter a valid Steam ID or Community ID';
+            // Re-emit the operator's raw input verbatim on the bounce
+            // so they see exactly what they typed and can correct the
+            // typo, instead of having the form silently clear.
+            $_POST['steam'] = $rawSteam;
+        } else {
+            // Convert ONLY after the shape gate passes. With the
+            // library tightening from follow-up #1 this call cannot
+            // throw — every input passing `isValidID()` resolves
+            // through the shared `ID_PATTERNS` table.
+            $_POST['steam'] = \SteamID\SteamID::toSteam2($rawSteam);
+        }
+    } elseif ($rawSteam === '') {
+        // IP-type ban, no Steam ID typed: nothing to record.
+        $_POST['steam'] = '';
+    } elseif (!\SteamID\SteamID::isValidID($rawSteam)) {
+        // IP-type ban with a typed Steam ID-of-record: validate its shape
+        // before converting so a garbage value can't escape `toSteam2()`
+        // as an uncaught Exception. Bounce with the raw input preserved,
+        // same as the Steam-branch typo path above.
         $error++;
-        $errorScript .= "$('steam.msg').innerHTML = 'You must type a Steam ID or Community ID';";
-        $errorScript .= "$('steam.msg').setStyle('display', 'block');";
-    } elseif ($_POST['type'] == 0 && !\SteamID\SteamID::isValidID($_POST['steam'])) {
-        $error++;
-        $errorScript .= "$('steam.msg').innerHTML = 'Please enter a valid Steam ID or Community ID';";
-        $errorScript .= "$('steam.msg').setStyle('display', 'block');";
-    } elseif (empty($_POST['ip']) && $_POST['type'] == 1) {
+        $validationErrors['steam'] = 'Please enter a valid Steam ID or Community ID';
+        $_POST['steam'] = $rawSteam;
+    } else {
+        // Keep the canonical Steam ID alongside the IP (record-of-fact;
+        // enforcement is IP-only). Parity with `api_bans_add`'s IP-type
+        // branch.
+        $_POST['steam'] = \SteamID\SteamID::toSteam2($rawSteam);
+    }
+
+    if ($error === 0 && empty($_POST['ip']) && $postBanType === BanType::Ip) {
         // Didn't type an IP
         $error++;
-        $errorScript .= "$('ip.msg').innerHTML = 'You must type an IP';";
-        $errorScript .= "$('ip.msg').setStyle('display', 'block');";
-    } elseif ($_POST['type'] == 1 && !filter_var($_POST['ip'], FILTER_VALIDATE_IP)) {
+        $validationErrors['ip'] = 'You must type an IP';
+    } elseif ($error === 0 && $postBanType === BanType::Ip && !filter_var($_POST['ip'], FILTER_VALIDATE_IP)) {
         $error++;
-        $errorScript .= "$('ip.msg').innerHTML = 'You must type a valid IP';";
-        $errorScript .= "$('ip.msg').setStyle('display', 'block');";
+        $validationErrors['ip'] = 'You must type a valid IP';
     }
 
     // Didn't type a custom reason
     if ($_POST['listReason'] == "other" && empty($_POST['txtReason'])) {
         $error++;
-        $errorScript .= "$('reason.msg').innerHTML = 'You must type a reason';";
-        $errorScript .= "$('reason.msg').setStyle('display', 'block');";
+        $validationErrors['reason'] = 'You must type a reason';
     }
 
     // prune any old bans
     PruneBans();
 
     if ($error == 0) {
-        // Check if the new steamid is already banned
-        if ($_POST['type'] == 0) {
-            $chk = $GLOBALS['db']->GetRow("SELECT count(bid) AS count FROM " . DB_PREFIX . "_bans WHERE authid = ? AND (length = 0 OR ends > UNIX_TIMESTAMP()) AND RemovedBy IS NULL AND type = '0' AND bid != ?", array(
-                $_POST['steam'],
-                (int) $_GET['id']
-            ));
+        // Check if the new steamid is already banned. Surface the
+        // conflicting bid so the admin can investigate the OTHER
+        // active row that's blocking this edit (mirrors the same
+        // wording the JSON `bans.add` action emits — see
+        // `web/api/handlers/bans.php::api_bans_add`).
+        if ($postBanType === BanType::Steam) {
+            $GLOBALS['PDO']->query("SELECT bid FROM `:prefix_bans` WHERE authid = :authid AND (length = 0 OR ends > UNIX_TIMESTAMP()) AND RemovedBy IS NULL AND type = '0' AND bid != :bid ORDER BY bid DESC LIMIT 1");
+            $GLOBALS['PDO']->bindMultiple([
+                ':authid' => $_POST['steam'],
+                ':bid'    => (int) $_GET['id'],
+            ]);
+            $chk = $GLOBALS['PDO']->single();
 
-            if ((int) $chk[0] > 0) {
+            if ($chk) {
                 $error++;
-                $errorScript .= "$('steam.msg').innerHTML = 'This SteamID is already banned';";
-                $errorScript .= "$('steam.msg').setStyle('display', 'block');";
+                $validationErrors['steam'] = 'This SteamID is already banned by ban #' . (int) $chk['bid'];
             } else {
                 // Check if player is immune
                 $admchk = $userbank->GetAllAdmins();
                 foreach ($admchk as $admin) {
                     if ($admin['authid'] == $_POST['steam'] && $userbank->GetProperty('srv_immunity') < $admin['srv_immunity']) {
                         $error++;
-                        $errorScript .= "$('steam.msg').innerHTML = 'Admin " . $admin['user'] . " is immune';";
-                        $errorScript .= "$('steam.msg').setStyle('display', 'block');";
+                        $validationErrors['steam'] = 'Admin ' . $admin['user'] . ' is immune';
                         break;
                     }
                 }
             }
-        } elseif ($_POST['type'] == 1) {
+        } elseif ($postBanType === BanType::Ip) {
             // Check if the ip is already banned
-            $chk = $GLOBALS['db']->GetRow("SELECT count(bid) AS count FROM " . DB_PREFIX . "_bans WHERE ip = ? AND (length = 0 OR ends > UNIX_TIMESTAMP()) AND RemovedBy IS NULL AND type = '1' AND bid != ?", array(
-                $_POST['ip'],
-                (int) $_GET['id']
-            ));
+            $GLOBALS['PDO']->query("SELECT bid FROM `:prefix_bans` WHERE ip = :ip AND (length = 0 OR ends > UNIX_TIMESTAMP()) AND RemovedBy IS NULL AND type = '1' AND bid != :bid ORDER BY bid DESC LIMIT 1");
+            $GLOBALS['PDO']->bindMultiple([
+                ':ip'  => $_POST['ip'],
+                ':bid' => (int) $_GET['id'],
+            ]);
+            $chk = $GLOBALS['PDO']->single();
 
-            if ((int) $chk[0] > 0) {
+            if ($chk) {
                 $error++;
-                $errorScript .= "$('ip.msg').innerHTML = 'This IP is already banned';";
-                $errorScript .= "$('ip.msg').setStyle('display', 'block');";
+                $validationErrors['ip'] = 'This IP is already banned by ban #' . (int) $chk['bid'];
             }
         }
     }
 
-    $_POST['ip'] = preg_replace('#[^\d\.]#', '', $_POST['ip']); //strip ip of all but numbers and dots
+    $_POST['ip'] = preg_replace('#[^\d\.]#', '', (string) ($_POST['ip'] ?? '')); //strip ip of all but numbers and dots
     $reason = $_POST['listReason'] == "other" ? $_POST['txtReason'] : $_POST['listReason'];
 
     if (!$_POST['banlength']) {
@@ -146,85 +271,302 @@ if (isset($_POST['name'])) {
 
     // Only process if there are still no errors
     if ($error == 0) {
-        $lengthrev = $GLOBALS['db']->Execute("SELECT length, authid FROM " . DB_PREFIX . "_bans WHERE bid = '" . (int) $_GET['id'] . "'");
+        $GLOBALS['PDO']->query("SELECT length, authid FROM `:prefix_bans` WHERE bid = :bid");
+        $GLOBALS['PDO']->bind(':bid', $_GET['id']);
+        $lengthrev = $GLOBALS['PDO']->single();
 
-
-        $edit = $GLOBALS['db']->Execute(
-            "UPDATE " . DB_PREFIX . "_bans SET
-            `name` = ?, `type` = ?, `reason` = ?, `authid` = ?,
-            `length` = ?,
-            `ip` = ?,
+        $GLOBALS['PDO']->query(
+            "UPDATE `:prefix_bans` SET
+            `name` = :name, `type` = :type, `reason` = :reason, `authid` = :authid,
+            `length` = :length,
+            `ip` = :ip,
             `country` = '',
-            `ends` 	 =  `created` + ?
-            WHERE bid = ?",
-            array(
-                $_POST['name'],
-                $_POST['type'],
-                $reason,
-                $_POST['steam'],
-                $_POST['banlength'],
-                $_POST['ip'],
-                $_POST['banlength'],
-                (int) $_GET['id']
-            )
+            `ends` 	 =  `created` + :ends
+            WHERE bid = :bid"
         );
+        $GLOBALS['PDO']->bindMultiple([
+            ':name'   => $_POST['name'],
+            ':type'   => $postBanType->value,
+            ':reason' => $reason,
+            ':authid' => $_POST['steam'],
+            ':length' => $_POST['banlength'],
+            ':ip'     => $_POST['ip'],
+            ':ends'   => $_POST['banlength'],
+            ':bid'    => (int) $_GET['id'],
+        ]);
+        $GLOBALS['PDO']->execute();
 
         // Set all submissions to archived for that steamid
-        $GLOBALS['db']->Execute("UPDATE `" . DB_PREFIX . "_submissions` SET archiv = '3', archivedby = '" . $userbank->GetAid() . "' WHERE SteamId = ?;", array(
-            $_POST['steam']
-        ));
+        $GLOBALS['PDO']->query("UPDATE `:prefix_submissions` SET archiv = '3', archivedby = :aid WHERE SteamId = :steam");
+        $GLOBALS['PDO']->bindMultiple([
+            ':aid'   => $userbank->GetAid(),
+            ':steam' => $_POST['steam'],
+        ]);
+        $GLOBALS['PDO']->execute();
 
         if (!empty($_POST['dname'])) {
-            $demoid = $GLOBALS['db']->GetRow("SELECT filename FROM `" . DB_PREFIX . "_demos` WHERE demid = '" . $_GET['id'] . "';");
+            $GLOBALS['PDO']->query("SELECT filename FROM `:prefix_demos` WHERE demid = :id");
+            $GLOBALS['PDO']->bind(':id', $_GET['id']);
+            $demoid = $GLOBALS['PDO']->single();
             @unlink(SB_DEMOS . "/" . $demoid['filename']);
-            $edit         = $GLOBALS['db']->Execute(
-                "REPLACE INTO " . DB_PREFIX . "_demos
+            $GLOBALS['PDO']->query(
+                "REPLACE INTO `:prefix_demos`
                 (`demid`, `demtype`, `filename`, `origname`)
                 VALUES
-                (?,
+                (:demid,
                 'b',
-                ?,
-                ?)",
-                array(
-                    (int) $_GET['id'],
-                    $_POST['did'],
-                    $_POST['dname']
-                )
+                :filename,
+                :origname)"
             );
+            $GLOBALS['PDO']->bindMultiple([
+                ':demid'    => (int) $_GET['id'],
+                ':filename' => $_POST['did'],
+                ':origname' => $_POST['dname'],
+            ]);
+            $GLOBALS['PDO']->execute();
             $res['dname'] = $_POST['dname'];
         }
 
-        if ($_POST['banlength'] != $lengthrev->fields['length']) {
-            Log::add("m", "Ban length edited", "Ban length for ({$lengthrev->fields['authid']}) has been updated."
-                . " Before: {$lengthrev->fields['length']}; Now: {$_POST['banlength']}.");
+        if ($_POST['banlength'] != $lengthrev['length']) {
+            Log::add(LogType::Message, "Ban length edited", "Ban length for ({$lengthrev['authid']}) has been updated."
+                . " Before: {$lengthrev['length']}; Now: {$_POST['banlength']}.");
         }
-        echo '<script>ShowBox("Ban updated", "The ban has been updated successfully", "green", "index.php?p=banlist' . $pagelink . '");</script>';
+        $postSuccess = true;
     }
 }
 
-if (!$res) {
-    echo '<script>ShowBox("Error", "There was an error getting details. Maybe the ban has been deleted?", "red", "index.php?p=banlist' . $pagelink . '");</script>';
+$customReason = Config::getBool('bans.customreasons')
+    ? unserialize((string) Config::get('bans.customreasons'))
+    : false;
+/** @var false|list<string> $customReason */
+
+$hasDemo = !empty($res['dname']);
+$banDemoHtml = '';
+if ($hasDemo) {
+    // Issue #1113: dname is the admin-supplied original filename of the
+    // demo (POST'd by whoever edited the ban + uploaded the demo, stored
+    // as `:prefix_demos.origname`). It used to be interpolated raw into
+    // HTML rendered with `nofilter`, so a filename like
+    // `<img src=x onerror=…>` turned the edit-ban page into stored XSS
+    // for any admin viewing that ban. htmlspecialchars + ENT_QUOTES so
+    // the value is safe inside the link text. The href is server-built
+    // from the int-cast bid only (#1464).
+    $safeName = htmlspecialchars((string) $res['dname'], ENT_QUOTES, 'UTF-8');
+    $demoUrl  = 'getdemo.php?type=B&id=' . rawurlencode((string) $_GET['id']);
+    $banDemoHtml = 'Uploaded: <a href="' . $demoUrl . '" data-testid="editban-demo-download"><b>'
+        . $safeName . '</b></a>';
 }
 
-$theme->assign('ban_name', $res['name']);
-$theme->assign('ban_reason', $res['reason']);
-$theme->assign('ban_authid', trim($res['authid']));
-$theme->assign('ban_ip', $res['ip']);
-$theme->assign('ban_demo', (!empty($res['dname']) ? "Uploaded: <b>" . $res['dname'] . "</b>" : ""));
-$theme->assign('customreason', (Config::getBool('bans.customreasons')) ? unserialize(Config::get('bans.customreasons')) : false);
+\Sbpp\View\Renderer::render($theme, new \Sbpp\View\AdminBansEditView(
+    can_edit_ban: $canEditBan,
+    ban_id:       (int) $_GET['id'],
+    has_demo:     $hasDemo,
+    ban_name:     (string) $res['name'],
+    ban_authid:   trim((string) $res['authid']),
+    ban_ip:       (string) $res['ip'],
+    ban_demo:     $banDemoHtml,
+    customreason: $customReason,
+));
 
-$theme->setLeftDelimiter('-{');
-$theme->setRightDelimiter('}-');
-$theme->display('page_admin_edit_ban.tpl');
-$theme->setLeftDelimiter('{');
-$theme->setRightDelimiter('}');
+// Tail script — self-contained vanilla helpers the page needs after
+// the row renders (the v1.x MooTools-flavoured `changeReason`,
+// `selectLengthTypeReason`, `demo` came from the removed bulk JS file).
+//
+// Order:
+//   1. Replay POST validation errors into the per-field `*.msg` divs.
+//   2. Emit the "saved" toast + redirect on success.
+//   3. Define `changeReason`, `selectLengthTypeReason`, `demo` as
+//      vanilla functions targeting the matching DOM ids.
+//   4. Hydrate the `<select>`s with the row's current type/length/
+//      reason via `selectLengthTypeReason`.
+$validationErrorsJs = json_encode($validationErrors, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+$banLengthSeconds = (int) $res['length'];
+$banType = (int) $res['type'];
+// $res['reason'] is admin-controlled free text — JSON-encode it so any
+// quote / backslash / non-ASCII byte survives the round-trip into the
+// inline script body unmolested. The hydrator does an equality check on
+// `<option>.value` against this string, so preserving the literal byte
+// sequence matters.
+$banReasonJs = json_encode((string) $res['reason'], JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+$redirectUrl = 'index.php?p=banlist' . $pagelink;
+$redirectUrlJs = json_encode($redirectUrl, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+$postSuccessJs = $postSuccess ? 'true' : 'false';
+$banIdJs = json_encode((int) $_GET['id'], JSON_THROW_ON_ERROR);
 ?>
-<script type="text/javascript">window.addEvent('domready', function(){
-<?=$errorScript?>
-});
-function changeReason(szListValue)
-{
-    $('dreason').style.display = (szListValue == "other" ? "block" : "none");
-}
-selectLengthTypeReason('<?=(int) $res['length']?>', '<?=$res['type']?>', '<?=addslashes($res['reason'])?>');
+<script>
+(function () {
+    'use strict';
+
+    /** @type {{[k: string]: string}} */
+    var validationErrors = <?=$validationErrorsJs?>;
+    var postSuccess = <?=$postSuccessJs?>;
+    var redirectUrl = <?=$redirectUrlJs?>;
+    var banId = <?=$banIdJs?>;
+
+    function $id(id) { return document.getElementById(id); }
+    function setBusy(btn, busy) {
+        if (window.SBPP && typeof window.SBPP.setBusy === 'function') {
+            window.SBPP.setBusy(btn, busy);
+            return;
+        }
+        if (btn) btn.disabled = busy;
+    }
+    function setMsg(id, text) {
+        var el = $id(id);
+        if (!el) return;
+        if (text) {
+            el.textContent = text;
+            el.style.display = 'block';
+        } else {
+            el.textContent = '';
+            el.style.display = 'none';
+        }
+    }
+    function toast(kind, title, body) {
+        var SBPP = window.SBPP;
+        if (SBPP && typeof SBPP.showToast === 'function') {
+            SBPP.showToast({
+                kind: kind === 'red' ? 'error' : kind === 'green' ? 'success' : kind,
+                title: title,
+                body: body
+            });
+            return;
+        }
+        if (window.sb && window.sb.message) {
+            var fn = (kind === 'red') ? window.sb.message.error
+                : (kind === 'green') ? window.sb.message.success
+                : window.sb.message.info;
+            if (typeof fn === 'function') fn(title, body || '');
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        Object.keys(validationErrors).forEach(function (field) {
+            setMsg(field + '.msg', validationErrors[field]);
+        });
+        if (postSuccess) {
+            toast('green', 'Ban updated', 'The ban has been updated successfully');
+            setTimeout(function () { window.location.href = redirectUrl; }, 1500);
+        }
+    });
+
+    // Toggle the custom-reason textarea on/off based on the listReason
+    // dropdown. Replaces the legacy `$('dreason').style.display = …`
+    // helper that used the MooTools `$()` selector.
+    window.changeReason = function (szListValue) {
+        var dre = $id('dreason');
+        if (dre) dre.style.display = (szListValue === 'other' ? 'block' : 'none');
+    };
+
+    // Vanilla replacement for the v1.x `selectLengthTypeReason` helper:
+    // hydrate the type / banlength / listReason <select>s with the
+    // current ban's stored values after the form has rendered. Falls
+    // back to the "Other reason" branch (revealing the textarea +
+    // pre-filling its value) when the stored reason isn't one of the
+    // hard-coded preset options or a configured custom reason.
+    window.selectLengthTypeReason = function (length, type, reason) {
+        var banlength = $id('banlength');
+        if (banlength) {
+            for (var i = 0; i < banlength.options.length; i++) {
+                if (banlength.options[i].value === String(length / 60)) {
+                    banlength.options[i].selected = true;
+                    break;
+                }
+            }
+        }
+        var ttype = $id('type');
+        if (ttype && ttype.options[type]) {
+            ttype.options[type].selected = true;
+        }
+        var list = $id('listReason');
+        if (!list) return;
+        for (var j = 0; j < list.options.length; j++) {
+            if (list.options[j].innerHTML === reason) {
+                list.options[j].selected = true;
+                return;
+            }
+            if (list.options[j].value === 'other') {
+                var txt = $id('txtReason');
+                var dre = $id('dreason');
+                if (txt) txt.value = reason;
+                if (dre) dre.style.display = 'block';
+                list.options[j].selected = true;
+                return;
+            }
+        }
+    };
+
+    // The "Upload a demo" popup (pages/admin.uploaddemo.php) calls
+    // `window.opener.demo(id, name)` after a successful upload. Update
+    // the demo-status inline banner + the hidden `did`/`dname` inputs
+    // so the next save persists the new demo.
+    //
+    // The popup escapes `id` and `name` via JSON encoding before the
+    // call (admin.uploaddemo.php), so they are JavaScript primitives
+    // here; we still treat `name` as untrusted text and write it via
+    // textContent + a leading static label so any HTML metacharacters
+    // render literally, not as markup.
+    function setDemoStatus(name) {
+        var msg = $id('demo.msg');
+        if (msg) {
+            msg.textContent = '';
+            var label = document.createTextNode('Uploaded: ');
+            var a = document.createElement('a');
+            a.href = 'getdemo.php?type=B&id=' + encodeURIComponent(String(banId));
+            a.setAttribute('data-testid', 'editban-demo-download');
+            var b = document.createElement('b');
+            b.textContent = String(name);
+            a.appendChild(b);
+            msg.appendChild(label);
+            msg.appendChild(a);
+        }
+        var removeBtn = $id('removedemo');
+        if (removeBtn) {
+            removeBtn.hidden = false;
+        }
+    }
+
+    window.demo = function (id, name) {
+        setDemoStatus(name);
+        var did = $id('did');
+        var dname = $id('dname');
+        if (did) did.value = id;
+        if (dname) dname.value = name;
+    };
+
+    document.addEventListener('DOMContentLoaded', function () {
+        var removeBtn = $id('removedemo');
+        if (!removeBtn) return;
+        removeBtn.addEventListener('click', function () {
+            if (!window.confirm('Remove the demo attached to this ban? This cannot be undone.')) {
+                return;
+            }
+            if (!window.sb || !window.sb.api || typeof window.sb.api.call !== 'function') {
+                toast('red', 'Error', 'Unable to remove demo — panel API unavailable.');
+                return;
+            }
+            setBusy(removeBtn, true);
+            window.sb.api.call(Actions.BansRemoveDemo, { bid: banId }).then(function (r) {
+                setBusy(removeBtn, false);
+                if (!r.ok) {
+                    var err = r.error && r.error.message ? r.error.message : 'Unable to remove demo.';
+                    toast('red', 'Demo NOT Removed', err);
+                    return;
+                }
+                var msg = $id('demo.msg');
+                if (msg) msg.textContent = '';
+                var did = $id('did');
+                var dname = $id('dname');
+                if (did) did.value = '';
+                if (dname) dname.value = '';
+                removeBtn.hidden = true;
+                toast('green', 'Demo removed', 'The demo has been deleted from this ban.');
+            });
+        });
+    });
+
+    document.addEventListener('DOMContentLoaded', function () {
+        window.selectLengthTypeReason(<?=$banLengthSeconds?>, <?=$banType?>, <?=$banReasonJs?>);
+    });
+})();
 </script>

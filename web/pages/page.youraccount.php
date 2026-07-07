@@ -1,21 +1,7 @@
 <?php
-/*************************************************************************
-This file is part of SourceBans++
-
-SourceBans++ (c) 2014-2024 by SourceBans++ Dev Team
-
-The SourceBans++ Web panel is licensed under a
-Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
-
-You should have received a copy of the license along with this
-work.  If not, see <http://creativecommons.org/licenses/by-nc-sa/3.0/>.
-
-This program is based off work covered by the following copyright(s):
-SourceBans 1.4.11
-Copyright © 2007-2014 SourceBans Team - Part of GameConnect
-Licensed under CC-BY-NC-SA 3.0
-Page: <http://www.sourcebans.net/> - <http://www.gameconnect.net/>
-*************************************************************************/
+// SourceBans++ (c) 2014-2026 SourceBans++ Dev Team
+// Licensed under the Elastic License 2.0.
+// See LICENSE.txt for the full license text and THIRD-PARTY-NOTICES.txt for attributions.
 
 global $userbank, $theme;
 
@@ -28,25 +14,23 @@ if ($userbank->GetAid() == -1) {
     die();
 }
 
-new AdminTabs([
-    ['name' => 'View Permissions', 'permission' => ALL_WEB],
-    ['name' => 'Change Password', 'permission' => ALL_WEB],
-    ['name' => 'Server Password', 'permission' => ALL_WEB],
-    ['name' => 'Change Email', 'permission' => ALL_WEB]
-], $userbank, $theme);
+$GLOBALS['PDO']->query("SELECT `srv_password`, `email` FROM `:prefix_admins` WHERE `aid` = :aid");
+$GLOBALS['PDO']->bind(':aid', $userbank->GetAid());
+$res      = $GLOBALS['PDO']->single();
+$srvpwset = !empty($res['srv_password']);
 
-$res      = $GLOBALS['db']->Execute("SELECT `srv_password`, `email` FROM `" . DB_PREFIX . "_admins` WHERE `aid` = '" . $userbank->GetAid() . "'");
-$srvpwset = (!empty($res->fields['srv_password']) ? true : false);
+// #1207 ADM-9: group the granted web permissions by display category
+// (Bans, Servers, Admins, …) so the "Your permissions" card renders a
+// 2–3 column grid instead of a 30-item bullet wall. The category list
+// + grouping logic lives in `Sbpp\View\PermissionCatalog`; see that
+// class's docblock for the rationale.
+$webExtraFlags = (int) $userbank->GetProperty("extraflags");
 
-$theme->assign('srvpwset', $srvpwset);
-$theme->assign('email', $res->fields['email']);
-$theme->assign('user_aid', $userbank->GetAid());
-$theme->assign('web_permissions', BitToString($userbank->GetProperty("extraflags")));
-$theme->assign('server_permissions', SmFlagsToSb($userbank->GetProperty("srv_flags")));
-$theme->assign('min_pass_len', MIN_PASS_LENGTH);
-
-$theme->setLeftDelimiter('-{');
-$theme->setRightDelimiter('}-');
-$theme->display('page_youraccount.tpl');
-$theme->setLeftDelimiter('{');
-$theme->setRightDelimiter('}');
+\Sbpp\View\Renderer::render($theme, new \Sbpp\View\YourAccountView(
+    srvpwset:                $srvpwset,
+    email:                   (string) ($res['email'] ?? ''),
+    user_aid:                (int) $userbank->GetAid(),
+    web_permissions_grouped: \Sbpp\View\PermissionCatalog::groupedDisplayFromMask($webExtraFlags),
+    server_permissions:      SmFlagsToSb($userbank->GetProperty("srv_flags")),
+    min_pass_len:            (int) MIN_PASS_LENGTH,
+));

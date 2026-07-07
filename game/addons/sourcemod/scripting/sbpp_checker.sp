@@ -28,8 +28,9 @@
 #pragma newdecls required
 
 #include <sourcemod>
+#include <sbpp_version>
 
-#define VERSION "2.0.0"
+#define VERSION SB_VERSION
 #define LISTBANS_USAGE "sm_listbans <#userid|name> - Lists a user's prior bans from Sourcebans"
 #define LISTCOMMS_USAGE "sm_listcomms <#userid|name> - Lists a user's prior comms from Sourcebans"
 #define INVALID_TARGET -1
@@ -42,6 +43,17 @@ char g_DatabasePrefix[10] = "sb";
 
 SMCParser g_ConfigParser;
 Database g_DB;
+
+enum DatabaseState /* Database connection state */
+{
+	DatabaseState_None = 0,
+	DatabaseState_Wait,
+	DatabaseState_Connecting,
+	DatabaseState_Connected,
+}
+DatabaseState g_DatabaseState;
+int g_iSequence = 0;
+int g_iConnectLock = 0;
 
 int g_iBanCounts[MAXPLAYERS + 1];
 int g_iMuteCounts[MAXPLAYERS + 1];
@@ -66,7 +78,7 @@ public void OnPluginStart()
 	RegAdminCmd("sm_listcomms", OnListSourceCommsCmd, ADMFLAG_GENERIC, LISTCOMMS_USAGE);
 	RegAdminCmd("sb_reload", OnReloadCmd, ADMFLAG_RCON, "Reload sourcebans config and ban reason menu options");
 
-	Database.Connect(OnDatabaseConnected, "sourcebans");
+	DB_Connect();
 
 	if (g_bLate)
 	{
@@ -85,11 +97,46 @@ public Action OnReloadCmd(int client, int args)
 	return Plugin_Handled;
 }
 
+stock bool DB_Connect()
+{
+	if (g_DB)
+	{
+		return true;
+	}
+
+	if (g_DatabaseState == DatabaseState_Wait)
+	{
+		return false;
+	}
+
+	if (g_DatabaseState != DatabaseState_Connecting)
+	{
+		g_DatabaseState = DatabaseState_Connecting;
+		g_iConnectLock = ++g_iSequence;
+		Database.Connect(OnDatabaseConnected, "sourcebans", g_iConnectLock);
+	}
+
+	return false;
+}
+
 public void OnDatabaseConnected(Database db, const char[] error, any data)
 {
-	if (db == null)
-		SetFailState("Failed to connect to SourceBans DB, %s", error);
+	if (data != g_iConnectLock || g_DB)
+	{
+		if (db)
+			delete db;
+		return;
+	}
 
+	g_iConnectLock = 0;
+
+	if (db == null)
+	{
+		g_DatabaseState = DatabaseState_None;
+		SetFailState("Failed to connect to SourceBans DB, %s", error);
+	}
+
+	g_DatabaseState = DatabaseState_Connected;
 	g_DB = db;
 }
 
@@ -161,6 +208,11 @@ public void OnClientAuthorized(int client, const char[] auth)
 
 public void OnConnectBanCheck(Database db, DBResultSet results, const char[] error, any userid)
 {
+	if (results == null)
+	{
+		CheckDBConnection(error);
+	}
+
 	int client = GetClientOfUserId(userid);
 	if (!client || results == null || !results.FetchRow())
 		return;
@@ -267,6 +319,7 @@ public void OnListBans(Database db, DBResultSet results, const char[] error, Dat
 
 	if (results == null)
 	{
+		CheckDBConnection(error);
 		PrintListResponse(clientuid, client, "%sDB error while retrieving bans for %s:\n%s", Prefix, targetName, error);
 		return;
 	}
@@ -432,6 +485,7 @@ public void OnListComms(Database db, DBResultSet results, const char[] error, Da
 
 	if (results == null)
 	{
+		CheckDBConnection(error);
 		PrintListResponse(clientuid, client, "%sDB error while retrieving comms for %s:\n%s", Prefix, targetName, error);
 		return;
 	}
@@ -654,5 +708,34 @@ stock void LateLoading()
 		
 		GetClientAuthId(i, AuthId_Steam2, sSteam32ID, sizeof(sSteam32ID));
 		OnClientAuthorized(i, sSteam32ID);
+	}
+}
+
+public Action Timer_ReconnectDB(Handle timer)
+{
+	g_DatabaseState = DatabaseState_None;
+	DB_Connect();
+	return Plugin_Continue;
+}
+
+void CheckDBConnection(const char[] error)
+{
+	if (StrContains(error, "Lost connection", false) != -1 || StrContains(error, "gone away", false) != -1)
+	{
+		if (g_DB != null)
+		{
+			delete g_DB;
+			g_DB = null;
+		}
+
+		if (g_DatabaseState != DatabaseState_Wait)
+		{
+			g_DatabaseState = DatabaseState_Wait;
+			CreateTimer(2.0, Timer_ReconnectDB, _, TIMER_FLAG_NO_MAPCHANGE);
+		}
+	}
+	else
+	{
+		LogError("SourceChecker: Database query error: %s", error);
 	}
 }
