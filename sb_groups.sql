@@ -1,6 +1,6 @@
 INSERT INTO `sb_groups` (`gid`, `type`, `name`, `flags`) VALUES
-(1, 1, 'Web Admin Root', -513),
-(2, 1, 'Web Admin', -1006600960);
+(1, 1, 'Web Admin Root', 4294966783),
+(2, 1, 'Web Admin', 3288366336);
 
 -- --------------------------------------------------------
 
