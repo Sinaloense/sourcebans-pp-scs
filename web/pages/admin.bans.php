@@ -83,8 +83,8 @@ $canGroupBan     = $canAddBan && $groupBanEnabled;
  * file-upload `importBans` POST. These run regardless of section
  * because the redirects are out-of-band (banlist row -> "deleted" /
  * "unbanned" toast on bans landing page) and the POST has to hit its
- * dedicated section anyway. Order them BEFORE the AdminTabs sidebar
- * paints so any echo'd toast lands above the chrome.
+ * dedicated section anyway. Run them before the section body so any
+ * echo'd toast lands above the page content.
  */
 if (isset($_GET['mode']) && $_GET['mode'] == "delete") {
     echo "<script>sb.message.show('Ban Deleted', 'The ban has been deleted from SourceBans', 'green', '', true);</script>";
@@ -213,71 +213,6 @@ if (isset($_POST['action']) && $_POST['action'] == "importBans") {
     echo "<script>sb.message.show('Bans Import', '" . addslashes($importMsg) . "', 'green', '');</script>";
 }
 
-/*
- * #1275 — `$sections` array drives the new vertical sidebar via
- * AdminTabs. Each entry carries `slug` + `name` + `permission` +
- * `url` + `icon` (Lucide). Icons follow the Pattern A vocabulary
- * already in `admin.servers.php` / `admin.groups.php` / etc:
- * `plus` for create, `flag` for reports, `clipboard-list` for
- * queues, `upload` for file imports, `users` for multi-user.
- */
-/** @var list<array{slug: string, name: string, permission: int, url: string, icon: string}> $sections */
-$sections = [
-    [
-        'slug'       => 'add-ban',
-        'name'       => 'Add a ban',
-        'permission' => ADMIN_OWNER | ADMIN_ADD_BAN,
-        'url'        => 'index.php?p=admin&c=bans&section=add-ban',
-        'icon'       => 'plus',
-    ],
-];
-// #1421 — Ban protests / submissions ride the same feature-flag gate
-// shape group-ban does below: omitted from the sidebar entirely when
-// the public-pages toggle (`config.enableprotest` / `config.enablesubmit`)
-// is off, instead of leaving a dead link that lands on a page rendering
-// records the public form can't even produce. The matching section
-// handlers also short-circuit on direct URL access (see the
-// `if (!$protestEnabled)` / `if (!$submitEnabled)` stubs below).
-if ($protestEnabled) {
-    $sections[] = [
-        'slug'       => 'protests',
-        'name'       => 'Ban protests',
-        'permission' => ADMIN_OWNER | ADMIN_BAN_PROTESTS,
-        'url'        => 'index.php?p=admin&c=bans&section=protests',
-        'icon'       => 'flag',
-    ];
-}
-if ($submitEnabled) {
-    $sections[] = [
-        'slug'       => 'submissions',
-        'name'       => 'Ban submissions',
-        'permission' => ADMIN_OWNER | ADMIN_BAN_SUBMISSIONS,
-        'url'        => 'index.php?p=admin&c=bans&section=submissions',
-        'icon'       => 'clipboard-list',
-    ];
-}
-$sections[] = [
-    'slug'       => 'import',
-    'name'       => 'Import bans',
-    'permission' => ADMIN_OWNER | ADMIN_BAN_IMPORT,
-    'url'        => 'index.php?p=admin&c=bans&section=import',
-    'icon'       => 'upload',
-];
-// Group ban is feature-flag-gated (Config::getBool('config.enablegroupbanning'))
-// in addition to the permission gate. The other sections render an
-// access-denied stub when the user lacks the perm; group-ban is omitted
-// from the sidebar entirely when the feature is off, so the link
-// doesn't appear at all on installs that have the feature disabled.
-if ($groupBanEnabled) {
-    $sections[] = [
-        'slug'       => 'group-ban',
-        'name'       => 'Group ban',
-        'permission' => ADMIN_OWNER | ADMIN_ADD_BAN,
-        'url'        => 'index.php?p=admin&c=bans&section=group-ban',
-        'icon'       => 'users',
-    ];
-}
-
 $validSlugs = ['add-ban', 'protests', 'submissions', 'import', 'group-ban'];
 $section    = (string) ($_GET['section'] ?? '');
 
@@ -321,15 +256,6 @@ if (!in_array($section, $validSlugs, true)) {
         $section = 'add-ban';
     }
 }
-
-// AdminTabs opens the sidebar shell + emits the <aside> + opens the
-// content column. Closing tags live AFTER each render branch below —
-// document the pairing so future edits don't strand an open <div>.
-new AdminTabs($sections, $userbank, $theme, $section, 'Bans sections');
-
-// Helper to close the shell consistently after every section returns.
-// PHP doesn't bind a local closure to `return` from the outer scope,
-// so each branch echoes the closing pair itself before returning.
 
 // ---------------------------------------------------------------- add-ban
 if ($section === 'add-ban') {
@@ -441,9 +367,14 @@ var did = 0;
 var dname = "";
 function demo(id, name)
 {
-    $('demo.msg').setHTML("Uploaded: <b>" + name);
     did = id;
     dname = name;
+    // SECURITY-REVIEW: the original upload filename is untrusted. Render it
+    // as text, not HTML, and avoid the removed MooTools `$().setHTML()` API.
+    var message = document.getElementById("demo.msg");
+    if (message) {
+        message.textContent = "Uploaded: " + String(name);
+    }
 }
 
 function changeReason(szListValue)
@@ -549,18 +480,17 @@ window.__sbppApplyBanFields = function (d) {
     if (byId('steam'))      byId('steam').value      = d.steam    || '';
     if (byId('ip'))         byId('ip').value         = d.ip       || '';
     if (byId('txtReason'))  byId('txtReason').value  = '';
-    if (byId('demo.msg'))   byId('demo.msg').innerHTML = '';
+    if (byId('demo.msg'))   byId('demo.msg').textContent = '';
     if (typeof window.selectLengthTypeReason === 'function') {
         window.selectLengthTypeReason(d.length || 0, d.type || 0, d.reason || '');
     }
     if (d.demo) {
-        if (byId('demo.msg')) byId('demo.msg').innerHTML = d.demo.origname || '';
         if (typeof window.demo === 'function') window.demo(d.demo.filename, d.demo.origname);
+        else if (byId('demo.msg')) byId('demo.msg').textContent = String(d.demo.origname || '');
     }
 };
 </script>
 JS;
-    echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell — opened by new AdminTabs(...) above -->';
     return;
 }
 
@@ -573,12 +503,10 @@ if ($section === 'protests') {
     // denied"). Mirrors the `group-ban` stub a few branches below.
     if (!$protestEnabled) {
         echo '<div class="card"><div class="card__body"><p class="text-muted m-0">Ban protests are disabled in <strong>config.enableprotest</strong>.</p></div></div>';
-        echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell -->';
         return;
     }
     if (!$canProtests) {
         echo '<div class="card"><div class="card__body"><p class="text-muted m-0">Access denied.</p></div></div>';
-        echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell -->';
         return;
     }
 
@@ -592,10 +520,11 @@ if ($section === 'protests') {
     $protestView = (isset($_GET['view']) && $_GET['view'] === 'archive') ? 'archive' : 'current';
     $currentActive = $protestView === 'current' ? 'true' : 'false';
     $archiveActive = $protestView === 'archive' ? 'true' : 'false';
-    echo '<div class="chip-row" role="tablist" aria-label="Protest archive filter" data-testid="protests-archive-tabs" style="margin-bottom:0.75rem">'
+    echo '<div class="page-section" style="padding-bottom:0">'
+        . '<div class="chip-row" role="tablist" aria-label="Protest archive filter" data-testid="protests-archive-tabs" style="margin-bottom:0">'
         . '<a class="chip" data-active="' . $currentActive . '" data-testid="filter-chip-protests-current" role="tab" aria-selected="' . $currentActive . '" href="index.php?p=admin&amp;c=bans&amp;section=protests" title="Show current protests">Current</a>'
         . '<a class="chip" data-active="' . $archiveActive . '" data-testid="filter-chip-protests-archive" role="tab" aria-selected="' . $archiveActive . '" href="index.php?p=admin&amp;c=bans&amp;section=protests&amp;view=archive" title="Show the protest archive">Archive</a>'
-        . '</div>';
+        . '</div></div>';
 
     if ($protestView === 'current') {
         $ItemsPerPage = SB_BANS_PER_PAGE;
@@ -640,15 +569,42 @@ if ($section === 'protests') {
 
         $delete       = [];
         $protest_list = [];
+
+        $protestBids = array_map(static fn ($p) => (int) $p['bid'], $protests);
+        $protestBanDetailsByBid = [];
+        if ($protestBids !== []) {
+            $placeholders = implode(',', array_fill(0, count($protestBids), '?'));
+            $banRows      = $GLOBALS['PDO']->query(
+                "SELECT bid, ba.ip, ba.authid, ba.name, created, ends, length, reason, ba.aid, ba.sid AS ba_sid, email, ad.user, CONCAT(se.ip,':',se.port) AS server_addr, se.sid AS se_sid
+                 FROM `:prefix_bans` AS ba
+                 LEFT JOIN `:prefix_admins` AS ad ON ba.aid = ad.aid
+                 LEFT JOIN `:prefix_servers` AS se ON se.sid = ba.sid
+                 WHERE bid IN ($placeholders)"
+            )->resultset($protestBids);
+            foreach ($banRows as $banRow) {
+                $protestBanDetailsByBid[(int) $banRow['bid']] = $banRow;
+            }
+        }
+
+        $protestPids = array_map(static fn ($p) => (int) $p['pid'], $protests);
+        $protestCommentsByPid = [];
+        if ($protestPids !== []) {
+            $placeholders = implode(',', array_fill(0, count($protestPids), '?'));
+            $cRows        = $GLOBALS['PDO']->query(
+                "SELECT bid, cid, aid, commenttxt, added, edittime,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
+                 FROM `:prefix_comments` AS C
+                 WHERE type = 'P' AND bid IN ($placeholders) ORDER BY added desc"
+            )->resultset($protestPids);
+            foreach ($cRows as $cRow) {
+                $protestCommentsByPid[(int) $cRow['bid']][] = $cRow;
+            }
+        }
+
         foreach ($protests as $prot) {
             $prot['reason'] = wordwrap(htmlspecialchars($prot['reason']), 55, "<br />\n", true);
-            $GLOBALS['PDO']->query("SELECT bid, ba.ip, ba.authid, ba.name, created, ends, length, reason, ba.aid, ba.sid AS ba_sid, email, ad.user, CONCAT(se.ip,':',se.port) AS server_addr, se.sid AS se_sid
-                                            FROM `:prefix_bans` AS ba
-                                            LEFT JOIN `:prefix_admins` AS ad ON ba.aid = ad.aid
-                                            LEFT JOIN `:prefix_servers` AS se ON se.sid = ba.sid
-                                            WHERE bid = :bid");
-            $GLOBALS['PDO']->bind(':bid', (int) $prot['bid']);
-            $protestb = $GLOBALS['PDO']->single();
+            $protestb = $protestBanDetailsByBid[(int) $prot['bid']] ?? null;
             if (!$protestb) {
                 $delete[] = $prot['bid'];
                 continue;
@@ -665,13 +621,7 @@ if ($section === 'protests') {
             $prot['server']     = $protestb['server_addr'] ? $protestb['server_addr'] : "Web Ban";
             $prot['datesubmitted'] = Config::time($prot['datesubmitted']);
 
-            $GLOBALS['PDO']->query("SELECT cid, aid, commenttxt, added, edittime,
-                (SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
-                (SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
-                FROM `:prefix_comments` AS C
-                WHERE type = 'P' AND bid = :bid ORDER BY added desc");
-            $GLOBALS['PDO']->bind(':bid', (int) $prot['pid']);
-            $commentres = $GLOBALS['PDO']->resultset();
+            $commentres = $protestCommentsByPid[(int) $prot['pid']] ?? [];
             $prot['commentdata'] = bansBuildComments($commentres, $userbank, (int) $prot['pid'], 'P');
             $prot['protaddcomment'] = CreateLinkR('<i class="fas fa-comment-dots fa-lg"></i> Add Comment', 'index.php?p=banlist&comment=' . (int) $prot['pid'] . '&ctype=P');
 
@@ -730,20 +680,51 @@ if ($section === 'protests') {
         }
 
         $protest_list_archiv = [];
+
+        $protestArchivBids = [];
+        foreach ($protestsarchiv as $prot) {
+            if ($prot['archiv'] != "2") {
+                $protestArchivBids[] = (int) $prot['bid'];
+            }
+        }
+        $protestArchivBanDetailsByBid = [];
+        if ($protestArchivBids !== []) {
+            $placeholders = implode(',', array_fill(0, count($protestArchivBids), '?'));
+            $banRows      = $GLOBALS['PDO']->query(
+                "SELECT bid, ba.ip, ba.authid, ba.name, created, ends, length, reason, ba.aid, ba.sid AS ba_sid, email, ad.user, CONCAT(se.ip,':',se.port) AS server_addr, se.sid AS se_sid
+                 FROM `:prefix_bans` AS ba
+                 LEFT JOIN `:prefix_admins` AS ad ON ba.aid = ad.aid
+                 LEFT JOIN `:prefix_servers` AS se ON se.sid = ba.sid
+                 WHERE bid IN ($placeholders)"
+            )->resultset($protestArchivBids);
+            foreach ($banRows as $banRow) {
+                $protestArchivBanDetailsByBid[(int) $banRow['bid']] = $banRow;
+            }
+        }
+
+        $protestArchivPids = array_map(static fn ($p) => (int) $p['pid'], $protestsarchiv);
+        $protestArchivCommentsByPid = [];
+        if ($protestArchivPids !== []) {
+            $placeholders = implode(',', array_fill(0, count($protestArchivPids), '?'));
+            $cRows        = $GLOBALS['PDO']->query(
+                "SELECT bid, cid, aid, commenttxt, added, edittime,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
+                 FROM `:prefix_comments` AS C
+                 WHERE type = 'P' AND bid IN ($placeholders) ORDER BY added desc"
+            )->resultset($protestArchivPids);
+            foreach ($cRows as $cRow) {
+                $protestArchivCommentsByPid[(int) $cRow['bid']][] = $cRow;
+            }
+        }
+
+        $protestArchivToMarkDeleted = [];
         foreach ($protestsarchiv as $prot) {
             $prot['reason'] = wordwrap(htmlspecialchars($prot['reason']), 55, "<br />\n", true);
             if ($prot['archiv'] != "2") {
-                $GLOBALS['PDO']->query("SELECT bid, ba.ip, ba.authid, ba.name, created, ends, length, reason, ba.aid, ba.sid AS ba_sid, email, ad.user, CONCAT(se.ip,':',se.port) AS server_addr, se.sid AS se_sid
-                                                FROM `:prefix_bans` AS ba
-                                                LEFT JOIN `:prefix_admins` AS ad ON ba.aid = ad.aid
-                                                LEFT JOIN `:prefix_servers` AS se ON se.sid = ba.sid
-                                                WHERE bid = :bid");
-                $GLOBALS['PDO']->bind(':bid', (int) $prot['bid']);
-                $protestb = $GLOBALS['PDO']->single();
+                $protestb = $protestArchivBanDetailsByBid[(int) $prot['bid']] ?? null;
                 if (!$protestb) {
-                    $GLOBALS['PDO']->query("UPDATE `:prefix_protests` SET archiv = '2' WHERE pid = :pid");
-                    $GLOBALS['PDO']->bind(':pid', (int) $prot['pid']);
-                    $GLOBALS['PDO']->execute();
+                    $protestArchivToMarkDeleted[] = (int) $prot['pid'];
                     $prot['archiv']  = "2";
                     $prot['archive'] = "ban has been deleted.";
                 } else {
@@ -768,17 +749,16 @@ if ($section === 'protests') {
             }
             $prot['datesubmitted'] = Config::time($prot['datesubmitted']);
 
-            $GLOBALS['PDO']->query("SELECT cid, aid, commenttxt, added, edittime,
-                (SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
-                (SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
-                FROM `:prefix_comments` AS C
-                WHERE type = 'P' AND bid = :bid ORDER BY added desc");
-            $GLOBALS['PDO']->bind(':bid', (int) $prot['pid']);
-            $commentres = $GLOBALS['PDO']->resultset();
+            $commentres = $protestArchivCommentsByPid[(int) $prot['pid']] ?? [];
             $prot['commentdata'] = bansBuildComments($commentres, $userbank, (int) $prot['pid'], 'P');
             $prot['protaddcomment'] = CreateLinkR('<i class="fas fa-comment-dots fa-lg"></i> Add Comment', 'index.php?p=banlist&comment=' . (int) $prot['pid'] . '&ctype=P');
 
             array_push($protest_list_archiv, $prot);
+        }
+        if ($protestArchivToMarkDeleted !== []) {
+            $placeholders = implode(',', array_fill(0, count($protestArchivToMarkDeleted), '?'));
+            $GLOBALS['PDO']->query("UPDATE `:prefix_protests` SET archiv = '2' WHERE pid IN ($placeholders)")
+                ->execute($protestArchivToMarkDeleted);
         }
 
         \Sbpp\View\Renderer::render($theme, new \Sbpp\View\AdminBansProtestsArchivView(
@@ -789,7 +769,6 @@ if ($section === 'protests') {
             protest_count_archiv: (int) $page_count,
         ));
     }
-    echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell -->';
     return;
 }
 
@@ -800,22 +779,21 @@ if ($section === 'submissions') {
     // on a disabled install and the message points at the toggle key.
     if (!$submitEnabled) {
         echo '<div class="card"><div class="card__body"><p class="text-muted m-0">Ban submissions are disabled in <strong>config.enablesubmit</strong>.</p></div></div>';
-        echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell -->';
         return;
     }
     if (!$canSubmissions) {
         echo '<div class="card"><div class="card__body"><p class="text-muted m-0">Access denied.</p></div></div>';
-        echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell -->';
         return;
     }
 
     $submissionView = (isset($_GET['view']) && $_GET['view'] === 'archive') ? 'archive' : 'current';
     $currentActive = $submissionView === 'current' ? 'true' : 'false';
     $archiveActive = $submissionView === 'archive' ? 'true' : 'false';
-    echo '<div class="chip-row" role="tablist" aria-label="Submission archive filter" data-testid="submissions-archive-tabs" style="margin-bottom:0.75rem">'
+    echo '<div class="page-section" style="padding-bottom:0">'
+        . '<div class="chip-row" role="tablist" aria-label="Submission archive filter" data-testid="submissions-archive-tabs" style="margin-bottom:0">'
         . '<a class="chip" data-active="' . $currentActive . '" data-testid="filter-chip-submissions-current" role="tab" aria-selected="' . $currentActive . '" href="index.php?p=admin&amp;c=bans&amp;section=submissions" title="Show current submissions">Current</a>'
         . '<a class="chip" data-active="' . $archiveActive . '" data-testid="filter-chip-submissions-archive" role="tab" aria-selected="' . $archiveActive . '" href="index.php?p=admin&amp;c=bans&amp;section=submissions&amp;view=archive" title="Show the submission archive">Archive</a>'
-        . '</div>';
+        . '</div></div>';
 
     if ($submissionView === 'current') {
         $ItemsPerPage = SB_BANS_PER_PAGE;
@@ -856,33 +834,66 @@ if ($section === 'submissions') {
         }
 
         $submission_list = [];
+
+        $submissionSubids = array_map(static fn ($s) => (int) $s['subid'], $submissions);
+
+        $submissionDemoFilenameBySubid = [];
+        if ($submissionSubids !== []) {
+            $placeholders = implode(',', array_fill(0, count($submissionSubids), '?'));
+            $demRows      = $GLOBALS['PDO']->query(
+                "SELECT demid, filename FROM `:prefix_demos` WHERE demtype = 'S' AND demid IN ($placeholders)"
+            )->resultset($submissionSubids);
+            foreach ($demRows as $demRow) {
+                $submissionDemoFilenameBySubid[(int) $demRow['demid']] = $demRow['filename'];
+            }
+        }
+
+        $submissionModIds = [];
+        foreach ($submissions as $sub) {
+            $submissionModIds[(int) $sub['ModID']] = true;
+        }
+        $submissionModNameById = [];
+        if ($submissionModIds !== []) {
+            $modIds       = array_keys($submissionModIds);
+            $placeholders = implode(',', array_fill(0, count($modIds), '?'));
+            $modRows      = $GLOBALS['PDO']->query(
+                "SELECT mid, name FROM `:prefix_mods` WHERE mid IN ($placeholders)"
+            )->resultset($modIds);
+            foreach ($modRows as $modRow) {
+                $submissionModNameById[(int) $modRow['mid']] = $modRow['name'];
+            }
+        }
+
+        $submissionCommentsBySubid = [];
+        if ($submissionSubids !== []) {
+            $placeholders = implode(',', array_fill(0, count($submissionSubids), '?'));
+            $cRows        = $GLOBALS['PDO']->query(
+                "SELECT bid, cid, aid, commenttxt, added, edittime,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
+                 FROM `:prefix_comments` AS C
+                 WHERE type = 'S' AND bid IN ($placeholders) ORDER BY added desc"
+            )->resultset($submissionSubids);
+            foreach ($cRows as $cRow) {
+                $submissionCommentsBySubid[(int) $cRow['bid']][] = $cRow;
+            }
+        }
+
         foreach ($submissions as $sub) {
             $sub['name']   = wordwrap(htmlspecialchars($sub['name']), 55, "<br />", true);
             $sub['reason'] = wordwrap(htmlspecialchars($sub['reason']), 55, "<br />", true);
 
-            $GLOBALS['PDO']->query("SELECT filename FROM `:prefix_demos` WHERE demtype = 'S' AND demid = :subid");
-            $GLOBALS['PDO']->bind(':subid', (int) $sub['subid']);
-            $dem = $GLOBALS['PDO']->single();
-
-            $sub['demo'] = ($dem && !empty($dem['filename']) && @file_exists(SB_DEMOS . "/" . $dem['filename']))
+            $demoFilename = $submissionDemoFilenameBySubid[(int) $sub['subid']] ?? null;
+            $sub['demo'] = (!empty($demoFilename) && @file_exists(SB_DEMOS . "/" . $demoFilename))
                 ? '<a href="getdemo.php?id=' . urlencode($sub['subid']) . '&type=S"><i class=\'fas fa-video fa-lg\'></i> Get Demo</a>'
                 : "<a href=\"#\"><i class='fas fa-video-slash fa-lg'></i> No Demo</a>";
 
             $sub['submitted'] = Config::time($sub['submitted']);
 
-            $GLOBALS['PDO']->query("SELECT m.name FROM `:prefix_submissions` AS s LEFT JOIN `:prefix_mods` AS m ON m.mid = s.ModID WHERE s.subid = :subid");
-            $GLOBALS['PDO']->bind(':subid', (int) $sub['subid']);
-            $mod = $GLOBALS['PDO']->single();
-            $sub['mod'] = $mod['name'];
+            $sub['mod'] = $submissionModNameById[(int) $sub['ModID']] ?? null;
             $sub['hostname'] = empty($sub['server']) ? '<i><font color="#677882">Other server...</font></i>' : "";
 
-            $GLOBALS['PDO']->query("SELECT cid, aid, commenttxt, added, edittime,
-                (SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
-                (SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
-                FROM `:prefix_comments` AS C
-                WHERE type = 'S' AND bid = :bid ORDER BY added desc");
-            $GLOBALS['PDO']->bind(':bid', (int) $sub['subid']);
-            $commentres = $GLOBALS['PDO']->resultset();
+            $commentres = $submissionCommentsBySubid[(int) $sub['subid']] ?? [];
             $sub['commentdata'] = bansBuildComments($commentres, $userbank, (int) $sub['subid'], 'S');
             $sub['subaddcomment'] = CreateLinkR('<i class="fas fa-comment-dots fa-lg"></i> Add Comment', 'index.php?p=banlist&comment=' . (int) $sub['subid'] . '&ctype=S');
 
@@ -935,24 +946,63 @@ if ($section === 'submissions') {
         }
 
         $submission_list_archiv = [];
+
+        $submissionArchivSubids = array_map(static fn ($s) => (int) $s['subid'], $submissionsarchiv);
+
+        $submissionArchivDemoFilenameBySubid = [];
+        if ($submissionArchivSubids !== []) {
+            $placeholders = implode(',', array_fill(0, count($submissionArchivSubids), '?'));
+            $demRows      = $GLOBALS['PDO']->query(
+                "SELECT demid, filename FROM `:prefix_demos` WHERE demtype = 'S' AND demid IN ($placeholders)"
+            )->resultset($submissionArchivSubids);
+            foreach ($demRows as $demRow) {
+                $submissionArchivDemoFilenameBySubid[(int) $demRow['demid']] = $demRow['filename'];
+            }
+        }
+
+        $submissionArchivModIds = [];
+        foreach ($submissionsarchiv as $sub) {
+            $submissionArchivModIds[(int) $sub['ModID']] = true;
+        }
+        $submissionArchivModNameById = [];
+        if ($submissionArchivModIds !== []) {
+            $modIds       = array_keys($submissionArchivModIds);
+            $placeholders = implode(',', array_fill(0, count($modIds), '?'));
+            $modRows      = $GLOBALS['PDO']->query(
+                "SELECT mid, name FROM `:prefix_mods` WHERE mid IN ($placeholders)"
+            )->resultset($modIds);
+            foreach ($modRows as $modRow) {
+                $submissionArchivModNameById[(int) $modRow['mid']] = $modRow['name'];
+            }
+        }
+
+        $submissionArchivCommentsBySubid = [];
+        if ($submissionArchivSubids !== []) {
+            $placeholders = implode(',', array_fill(0, count($submissionArchivSubids), '?'));
+            $cRows        = $GLOBALS['PDO']->query(
+                "SELECT bid, cid, aid, commenttxt, added, edittime,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
+                 FROM `:prefix_comments` AS C
+                 WHERE type = 'S' AND bid IN ($placeholders) ORDER BY added desc"
+            )->resultset($submissionArchivSubids);
+            foreach ($cRows as $cRow) {
+                $submissionArchivCommentsBySubid[(int) $cRow['bid']][] = $cRow;
+            }
+        }
+
         foreach ($submissionsarchiv as $sub) {
             $sub['name']   = wordwrap(htmlspecialchars($sub['name']), 55, "<br />", true);
             $sub['reason'] = wordwrap(htmlspecialchars($sub['reason']), 55, "<br />", true);
 
-            $GLOBALS['PDO']->query("SELECT filename FROM `:prefix_demos` WHERE demtype = 'S' AND demid = :subid");
-            $GLOBALS['PDO']->bind(':subid', (int) $sub['subid']);
-            $dem = $GLOBALS['PDO']->single();
-
-            $sub['demo'] = ($dem && !empty($dem['filename']) && @file_exists(SB_DEMOS . "/" . $dem['filename']))
+            $demoFilename = $submissionArchivDemoFilenameBySubid[(int) $sub['subid']] ?? null;
+            $sub['demo'] = (!empty($demoFilename) && @file_exists(SB_DEMOS . "/" . $demoFilename))
                 ? '<a href="getdemo.php?id=' . urlencode($sub['subid']) . '&type=S"><i class=\'fas fa-video fa-lg\'></i> Get Demo</a>'
                 : "<a href=\"#\"><i class='fas fa-video-slash fa-lg'></i> No Demo</a>";
 
             $sub['submitted'] = Config::time($sub['submitted']);
 
-            $GLOBALS['PDO']->query("SELECT m.name FROM `:prefix_submissions` AS s LEFT JOIN `:prefix_mods` AS m ON m.mid = s.ModID WHERE s.subid = :subid");
-            $GLOBALS['PDO']->bind(':subid', (int) $sub['subid']);
-            $mod = $GLOBALS['PDO']->single();
-            $sub['mod'] = $mod['name'];
+            $sub['mod'] = $submissionArchivModNameById[(int) $sub['ModID']] ?? null;
             $sub['hostname'] = empty($sub['server']) ? '<i><font color="#677882">Other server...</font></i>' : "";
             if ($sub['archiv'] == "3") {
                 $sub['archive'] = "player has been banned.";
@@ -962,13 +1012,7 @@ if ($section === 'submissions') {
                 $sub['archive'] = "submission has been archived.";
             }
 
-            $GLOBALS['PDO']->query("SELECT cid, aid, commenttxt, added, edittime,
-                (SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
-                (SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
-                FROM `:prefix_comments` AS C
-                WHERE type = 'S' AND bid = :bid ORDER BY added desc");
-            $GLOBALS['PDO']->bind(':bid', (int) $sub['subid']);
-            $commentres = $GLOBALS['PDO']->resultset();
+            $commentres = $submissionArchivCommentsBySubid[(int) $sub['subid']] ?? [];
             $sub['commentdata'] = bansBuildComments($commentres, $userbank, (int) $sub['subid'], 'S');
             $sub['subaddcomment'] = CreateLinkR('<i class="fas fa-comment-dots fa-lg"></i> Add Comment', 'index.php?p=banlist&comment=' . (int) $sub['subid'] . '&ctype=S');
 
@@ -982,7 +1026,6 @@ if ($section === 'submissions') {
             submission_list_archiv: $submission_list_archiv,
         ));
     }
-    echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell -->';
     return;
 }
 
@@ -990,14 +1033,12 @@ if ($section === 'submissions') {
 if ($section === 'import') {
     if (!$canImport) {
         echo '<div class="card"><div class="card__body"><p class="text-muted m-0">Access denied.</p></div></div>';
-        echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell -->';
         return;
     }
     \Sbpp\View\Renderer::render($theme, new \Sbpp\View\AdminBansImportView(
         permission_import: true,
         extreq: ini_get('safe_mode') != 1,
     ));
-    echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell -->';
     return;
 }
 
@@ -1015,7 +1056,6 @@ if (!$canGroupBan) {
     echo '<div class="card"><div class="card__body"><p class="text-muted m-0">'
         . (!$canAddBan ? 'Access denied.' : 'Group banning is disabled in <strong>config.enablegroupbanning</strong>.')
         . '</p></div></div>';
-    echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell -->';
     return;
 }
 \Sbpp\View\Renderer::render($theme, new \Sbpp\View\AdminBansGroupsView(
@@ -1254,7 +1294,6 @@ echo <<<'JS'
 })();
 </script>
 JS;
-echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell -->';
 
 /*
  * Comment-thread builder used by both protests + submissions sections.
@@ -1264,12 +1303,14 @@ echo '</div></div><!-- /.admin-sidebar-content + /.admin-sidebar-shell -->';
  * splat into the View DTO.
  *
  * @param list<array<string,mixed>> $commentres
- * @param object $userbank Logged-in user (CUserManager-like).
- * @param int    $rowId    pid (for protests) or subid (for submissions).
- * @param string $type     'P' for protests, 'S' for submissions.
- * @return string|list<array<string,mixed>> "None" sentinel or comment rows.
+ * @return 'None'|list<array<string,mixed>>
  */
-function bansBuildComments(array $commentres, $userbank, int $rowId, string $type)
+function bansBuildComments(
+    array $commentres,
+    \Sbpp\Auth\UserManager $userbank,
+    int $rowId,
+    string $type,
+): string|array
 {
     if (count($commentres) === 0) {
         return "None";
@@ -1301,9 +1342,8 @@ function bansBuildComments(array $commentres, $userbank, int $rowId, string $typ
 
         $cdata['comname']    = $crow['comname'];
         $cdata['added']      = Config::time($crow['added']);
-        $commentText         = html_entity_decode($crow['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $commentText         = encodePreservingBr($commentText);
-        $commentText         = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?\S+)?)?)?)@', '<a href="$1" target="_blank">$1</a>', $commentText);
+        $commentText         = encodePreservingBr((string) $crow['commenttxt']);
+        $commentText         = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?[^\s<]+)?)?)?)@', '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>', $commentText);
         $cdata['commenttxt'] = $commentText;
 
         if (!empty($crow['edittime'])) {

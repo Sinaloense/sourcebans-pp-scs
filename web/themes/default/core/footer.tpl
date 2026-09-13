@@ -53,8 +53,10 @@
         live in web/scripts/sourcebans.js; the new theme drops that
         bulk file (#1123 D1) so the calls would error. B3 will
         re-implement the live-server widget via sb.api.call.
-      - sb.ready/tabs.init/tooltip: legacy MooTools-flavored helpers
-        replaced by theme.js's vanilla wiring.
+      - sb.ready/tabs.init: legacy MooTools-flavored helpers
+        replaced by theme.js's vanilla wiring. Tooltips live in
+        sb.js (`data-tooltip` / legacy `.tip`) and boot via event
+        delegation — no footer init call.
     Footer credits ($version + $git) are kept — pure display, no JS.
 *}
     </main>{* /.page *}
@@ -235,8 +237,8 @@
 {*
     #1402: comment-actions.js — single document-level click delegate
     for `data-action="comment-delete"` triggers (admin moderation
-    queues, banlist / commslist comment editor on themes that render
-    delcomlink). Loaded globally because the dispatcher is feature-
+    queues, banlist / commslist inline disclosures, and the player
+    drawer). Loaded globally because the dispatcher is feature-
     detected (no-op when no triggers exist) and the four surfaces it
     serves render from different page handlers; per-page includes
     would mean tracking four mount points instead of one. Pre-#1402
@@ -244,11 +246,7 @@
     `ReferenceError: RemoveComment is not defined` (the helper lived
     in the deleted sourcebans.js at #1123 D1).
 *}
-{* `defer` would be a no-op here since the script lives at the body
-   tail and the parser is already past the body. Drop it so the
-   markup matches the runtime behaviour (#1402 adversarial review
-   LOW 8). *}
-<script src="./scripts/comment-actions.js"></script>
+<script src="./scripts/comment-actions.js" defer></script>
 
 </body>
 </html>

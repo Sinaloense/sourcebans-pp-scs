@@ -36,10 +36,12 @@ if (!defined('IN_SB')) {
  * still build link strings server-side.
  *
  * NOTE: the `$tooltip`-bearing arm picks up the `tip` / `perm` CSS
- * class (legacy default theme); the bare arm has no class. The HTML
- * is whitespace-padded between the opening and closing tag for
- * legacy-template compatibility — the v1.x consumer relied on the
- * leading + trailing space when concatenating links inline.
+ * class (legacy default theme) and emits `data-tooltip` for the
+ * themed tip in `sb.js` (not the native `title=` bubble). The bare
+ * arm has no class. The HTML is whitespace-padded between the
+ * opening and closing tag for legacy-template compatibility — the
+ * v1.x consumer relied on the leading + trailing space when
+ * concatenating links inline.
  */
 function CreateLinkR(string $title, string $url, string $tooltip = '', string $target = '_self', bool $wide = false, string $onclick = ''): string
 {
@@ -50,7 +52,7 @@ function CreateLinkR(string $title, string $url, string $tooltip = '', string $t
     ];
     if ($hasTooltip) {
         $attrs['class'] = $wide ? 'perm' : 'tip';
-        $attrs['title'] = $tooltip;
+        $attrs['data-tooltip'] = $tooltip;
     } else {
         $attrs['onclick'] = $onclick;
     }
@@ -595,20 +597,41 @@ function parseRconStatus(string $status): array
  * `<br/>` tags as literal line breaks (the comment-store format
  * pre-#1113 wraps newlines in `<br/>`s; we want to escape every other
  * fragment but emit the line breaks back as `<br/>` after `nl2br()`).
+ * Comment text is stored raw, so entity-shaped input stays literal.
+ * Malformed historical bytes substitute to U+FFFD instead of blanking
+ * the containing segment.
  */
 function encodePreservingBr(string $text): string
 {
     $segments = preg_split('/(<br\s*\/?>)/i', $text, -1, PREG_SPLIT_DELIM_CAPTURE);
     if ($segments === false) {
-        return htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+        return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     $rendered = '';
     foreach ($segments as $segment) {
         $rendered .= preg_match('/^<br\s*\/?>$/i', $segment)
             ? "\n"
-            : htmlspecialchars($segment, ENT_QUOTES, 'UTF-8');
+            : htmlspecialchars($segment, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     return nl2br($rendered);
+}
+
+/**
+ * Replace malformed UTF-8 byte sequences without otherwise changing text.
+ *
+ * Historical comment rows can predate the utf8mb4 migration. Editable
+ * textarea values must remain raw (not pre-escaped), so use JSON's
+ * well-defined U+FFFD substitution to normalise them before Smarty applies
+ * its HTML escaping.
+ */
+function substituteInvalidUtf8(string $text): string
+{
+    if (mb_check_encoding($text, 'UTF-8')) {
+        return $text;
+    }
+
+    $encoded = json_encode($text, JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
+    return (string) json_decode($encoded, true, 512, JSON_THROW_ON_ERROR);
 }

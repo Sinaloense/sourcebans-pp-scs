@@ -497,18 +497,7 @@ if (isset($_GET['advSearch'])) {
             $where   = "WHERE CO.bid = ?";
             $advcrit = [$value];
             break;
-        case "steamid":
-            // #1130: match both STEAM_0:Y:Z and STEAM_1:Y:Z stored variants;
-            // see SteamID::toSearchPattern() for rationale.
-            $authidPattern = SteamID::toSearchPattern($value);
-            if ($authidPattern !== null) {
-                $where   = "WHERE CO.authid REGEXP ?";
-                $advcrit = [$authidPattern];
-            } else {
-                $where   = "WHERE CO.authid = ?";
-                $advcrit = [$value];
-            }
-            break;
+        case "steamid": // legacy exact-match URL; folded to always-partial
         case "steam":
             $where   = "WHERE CO.authid LIKE ?";
             $advcrit = ["%$value%"];
@@ -637,6 +626,67 @@ if ($BansEnd > $BanCount) {
 
 $view_comments = false;
 $bans          = [];
+
+$removedByAdminIds = [];
+foreach ($res as $row) {
+    if ($row['RemovedBy'] !== null) {
+        $removedByAdminIds[(int) $row['RemovedBy']] = true;
+    }
+}
+$removedByNames = [];
+if ($removedByAdminIds !== []) {
+    $ids          = array_keys($removedByAdminIds);
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    $adminRows    = $GLOBALS['PDO']->query(
+        "SELECT aid, user FROM `:prefix_admins` WHERE aid IN ($placeholders)"
+    )->resultset($ids);
+    foreach ($adminRows as $adminRow) {
+        $removedByNames[(int) $adminRow['aid']] = $adminRow['user'];
+    }
+}
+
+$bidList              = [];
+$siblingAuthidsToCheck = [];
+foreach ($res as $row) {
+    $bidList[] = (int) $row['ban_id'];
+
+    $effectiveSteamId = (string) $row['authid'];
+    if (!SteamID::isValidID($effectiveSteamId)) {
+        $effectiveSteamId = 'STEAM_0:0:00000000';
+    }
+    $siblingAuthidsToCheck[$effectiveSteamId] = true;
+}
+
+$activeSiblingCounts = [];
+if ($siblingAuthidsToCheck !== []) {
+    $authids      = array_keys($siblingAuthidsToCheck);
+    $placeholders = implode(',', array_fill(0, count($authids), '?'));
+    $countRows    = $GLOBALS['PDO']->query(
+        "SELECT authid, type, COUNT(bid) as cnt FROM `:prefix_comms` WHERE authid IN ($placeholders) AND RemovedBy IS NULL AND (length = 0 OR ends > UNIX_TIMESTAMP()) GROUP BY authid, type"
+    )->resultset($authids);
+    foreach ($countRows as $countRow) {
+        $activeSiblingCounts[$countRow['authid'] . '|' . (int) $countRow['type']] = (int) $countRow['cnt'];
+    }
+}
+
+$canComment           = $userbank->is_admin();
+$canDeleteComment     = $userbank->HasAccess(WebPermission::Owner);
+$commentsByBidComm    = [];
+$viewCommentsEnabled  = Config::getBool('config.enablepubliccomments') || $canComment;
+if ($viewCommentsEnabled && $bidList !== []) {
+    $placeholders = implode(',', array_fill(0, count($bidList), '?'));
+    $cRows        = $GLOBALS['PDO']->query(
+        "SELECT bid, cid, aid, commenttxt, added, edittime,
+			(SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
+			(SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
+			FROM `:prefix_comments` AS C
+			WHERE C.type = 'C' AND bid IN ($placeholders) ORDER BY bid, added desc"
+    )->resultset($bidList);
+    foreach ($cRows as $cRow) {
+        $commentsByBidComm[(int) $cRow['bid']][] = $cRow;
+    }
+}
+
 foreach ($res as $row) {
     $data = [];
 
@@ -722,12 +772,10 @@ foreach ($res as $row) {
         if (isset($row['unban_reason']))
             $data['ureason'] = stripslashes($row['unban_reason']);
 
-        $GLOBALS['PDO']->query("SELECT user FROM `:prefix_admins` WHERE aid = :aid");
-        $GLOBALS['PDO']->bind(':aid', $row['RemovedBy']);
-        $removedby         = $GLOBALS['PDO']->single();
-        $data['removedby'] = "";
-        if (!empty($removedby['user']) && $data['admin']) {
-            $data['removedby'] = $removedby['user'];
+        $removedByUser      = $removedByNames[(int) $row['RemovedBy']] ?? '';
+        $data['removedby']  = "";
+        if ($removedByUser !== '' && $data['admin']) {
+            $data['removedby'] = $removedByUser;
         }
     } else if ($data['ban_length'] == 'Permanent') {
         $data['class'] = "listtable_1_permanent";
@@ -744,13 +792,7 @@ foreach ($res as $row) {
     // Re-gag affordance must hide when the player already has an
     // active block of the same type (the duplicate-check in
     // `comms.add` would 4xx as `already_blocked`).
-    $GLOBALS['PDO']->query("SELECT count(bid) as count FROM `:prefix_comms` WHERE authid = :authid AND RemovedBy IS NULL AND type = :type AND (length = 0 OR ends > UNIX_TIMESTAMP())");
-    $GLOBALS['PDO']->bindMultiple([
-        ':authid' => $data['steamid'],
-        ':type'   => $data['type'],
-    ]);
-    $alrdybnd         = $GLOBALS['PDO']->single();
-    $hasActiveSibling = (int) $alrdybnd['count'] > 0;
+    $hasActiveSibling = ($activeSiblingCounts[$data['steamid'] . '|' . (int) $data['type']] ?? 0) > 0;
     $data['has_active_sibling'] = $hasActiveSibling;
     if (!$hasActiveSibling) {
         // #1275 — admin-comms is single-section Pattern A; the legacy
@@ -821,13 +863,7 @@ foreach ($res as $row) {
         // third-party theme that renders the name directly can't re-leak it
         // (parity with the focal admin-name gate above).
         $commentsHideAdmin = Config::getBool('banlist.hideadminname') && !$userbank->is_admin();
-        $GLOBALS['PDO']->query("SELECT cid, aid, commenttxt, added, edittime,
-											(SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
-											(SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
-											FROM `:prefix_comments` AS C
-											WHERE C.type = 'C' AND bid = :bid ORDER BY added desc");
-        $GLOBALS['PDO']->bind(':bid', $data['ban_id']);
-        $commentres    = $GLOBALS['PDO']->resultset();
+        $commentres    = $commentsByBidComm[(int) $data['ban_id']] ?? [];
 
         if (count($commentres) > 0) {
             if ($mute_count > 0 || $gag_count > 0) {
@@ -838,9 +874,22 @@ foreach ($res as $row) {
             foreach ($commentres as $crow) {
                 $cdata            = [];
                 $cdata['morecom'] = ($morecom == 1 ? true : false);
-                if ($crow['aid'] == $userbank->GetAid() || $userbank->HasAccess(WebPermission::Owner)) {
-                    $cdata['editcomlink'] = CreateLinkR('<i class="fas fa-edit fa-lg"></i>', 'index.php?p=commslist&comment=' . $data['ban_id'] . '&ctype=C&cid=' . $crow['cid'] . $pagelink, 'Edit Comment');
-                    if ($userbank->HasAccess(WebPermission::Owner)) {
+                $canEditThisComment = $canComment
+                    && ((int) $crow['aid'] === $userbank->GetAid() || $canDeleteComment);
+                $editCommentUrl = 'index.php?p=commslist&comment=' . $data['ban_id']
+                    . '&ctype=C&cid=' . (int) $crow['cid'] . $pagelink;
+
+                $cdata['cid']         = (int) $crow['cid'];
+                $cdata['can_edit']    = $canEditThisComment;
+                $cdata['can_delete']  = $canDeleteComment;
+                $cdata['edit_url']    = $editCommentUrl;
+                $cdata['page']        = isset($_GET["page"]) ? (int) $_GET["page"] : -1;
+                $cdata['editcomlink'] = '';
+                $cdata['delcomlink']  = '';
+
+                if ($canEditThisComment) {
+                    $cdata['editcomlink'] = CreateLinkR('<i class="fas fa-edit fa-lg"></i>', $editCommentUrl, 'Edit Comment');
+                    if ($canDeleteComment) {
                         // #1402: see web/scripts/comment-actions.js for the dispatcher.
                         $cdata['delcomlink'] = '<a href="#" class="tip" title="Delete Comment" target="_self"'
                             . ' data-action="comment-delete"'
@@ -849,17 +898,13 @@ foreach ($res as $row) {
                             . ' data-page="' . (isset($_GET["page"]) ? (int) $_GET["page"] : -1) . '"'
                             . '><i class="fas fa-trash fa-lg"></i></a>';
                     }
-                } else {
-                    $cdata['editcomlink'] = "";
-                    $cdata['delcomlink']  = "";
                 }
 
                 $cdata['comname']    = $commentsHideAdmin ? '' : $crow['comname'];
                 $cdata['added']      = Config::time($crow['added']);
-                $commentText         = html_entity_decode($crow['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
-                $commentText         = encodePreservingBr($commentText);
+                $commentText         = encodePreservingBr((string) $crow['commenttxt']);
                 // Parse links and wrap them in a <a href=""></a> tag to be easily clickable
-                $commentText         = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?\S+)?)?)?)@', '<a href="$1" target="_blank">$1</a>', $commentText);
+                $commentText         = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?[^\s<]+)?)?)?)@', '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>', $commentText);
                 $cdata['commenttxt'] = $commentText;
 
                 if (!empty($crow['edittime'])) {
@@ -880,7 +925,8 @@ foreach ($res as $row) {
         $data['commentdata'] = $comment;
     }
 
-    $data['addcomment'] = CreateLinkR('<i class="fas fa-comment-dots fa-lg"></i> Add Comment', 'index.php?p=commslist&comment=' . $data['ban_id'] . '&ctype=C' . $pagelink);
+    $data['comment_url'] = 'index.php?p=commslist&comment=' . $data['ban_id'] . '&ctype=C' . $pagelink;
+    $data['addcomment']  = CreateLinkR('<i class="fas fa-comment-dots fa-lg"></i> Add Comment', $data['comment_url']);
     //-----------------------------------
     $data['counts']     = $delimiter . $mutes . $gags;
 
@@ -1043,34 +1089,59 @@ if ($BanCount === 0) {
 // Comment-drawer locals. Computed into PHP locals here (instead of
 // the older `$theme->assign(...)` calls) so they can be threaded
 // into the View constructor below — Renderer copies every public
-// property onto $theme. The shipped v2.0.0 default theme defers the
-// editor UI to a follow-up; any third-party theme that forked the
-// pre-v2.0.0 default still renders it when `{if $comment}` is truthy.
+// property onto $theme. The default theme and banlist share
+// `partials/punishment-comment-editor.tpl`.
 $ceditType  = '';
 $ceditText  = '';
 $ceditCtype        = '';
 $ceditCid          = '';
 $ceditPage         = -1;
 $ceditOthers = [];
-if (isset($_GET["comment"])) {
+$ceditCanEdit = false;
+$ceditdata    = false;
+$ceditParentId = isset($_GET["comment"]) ? (int) $_GET["comment"] : 0;
+$ceditParentExists = $ceditParentId > 0
+    && $viewCommentsEnabled
+    && (string) ($_GET["ctype"] ?? '') === 'C'
+    && $GLOBALS['PDO']->query(
+        'SELECT bid FROM `:prefix_comms` WHERE bid = ?'
+    )->single([$ceditParentId]) !== false;
+if (
+    isset($_GET["comment"])
+    && $ceditParentExists
+) {
     $ceditType = isset($_GET["cid"]) ? "Edit" : "Add";
     if (isset($_GET["cid"])) {
-        $GLOBALS['PDO']->query("SELECT * FROM `:prefix_comments` WHERE cid = :cid");
+        $GLOBALS['PDO']->query(
+            "SELECT * FROM `:prefix_comments`
+             WHERE cid = :cid AND bid = :bid AND type = 'C'"
+        );
         $GLOBALS['PDO']->bind(':cid', (int) $_GET["cid"]);
+        $GLOBALS['PDO']->bind(':bid', $ceditParentId);
         $ceditdata      = $GLOBALS['PDO']->single();
-        $ceditText = html_entity_decode($ceditdata['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $cotherdataedit = " AND cid != '" . (int) $_GET["cid"] . "'";
-    } else {
-        $cotherdataedit = "";
+        $ceditText = $ceditdata
+            ? substituteInvalidUtf8((string) $ceditdata['commenttxt'])
+            : '';
     }
-    $cotherdata = $GLOBALS['PDO']->query("SELECT cid, aid, commenttxt, added, edittime,
-											(SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
-											(SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
-											FROM `:prefix_comments` AS C
-											WHERE type = ? AND bid = ?" . $cotherdataedit . " ORDER BY added desc")->resultset([
-        $_GET["ctype"],
-        $_GET["comment"],
-    ]);
+    if (isset($_GET["cid"])) {
+        $cotherdata = $GLOBALS['PDO']->query(
+            "SELECT cid, aid, commenttxt, added, edittime,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
+               FROM `:prefix_comments` AS C
+              WHERE type = ? AND bid = ? AND cid != ?
+           ORDER BY added DESC"
+        )->resultset([(string) $_GET["ctype"], $ceditParentId, (int) $_GET["cid"]]);
+    } else {
+        $cotherdata = $GLOBALS['PDO']->query(
+            "SELECT cid, aid, commenttxt, added, edittime,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.aid) AS comname,
+                    (SELECT user FROM `:prefix_admins` WHERE aid = C.editaid) AS editname
+               FROM `:prefix_comments` AS C
+              WHERE type = ? AND bid = ?
+           ORDER BY added DESC"
+        )->resultset([(string) $_GET["ctype"], $ceditParentId]);
+    }
 
     // #1500: same gate as the per-comm comment thread above — null admin
     // usernames for public viewers so this comment-edit surface (reachable
@@ -1081,11 +1152,10 @@ if (isset($_GET["comment"])) {
         $coment               = [];
         $coment['comname']    = $commentsHideAdmin ? '' : $cdrow['comname'];
         $coment['added']      = Config::time($cdrow['added']);
-        $commentText          = html_entity_decode($cdrow['commenttxt'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $commentText          = encodePreservingBr($commentText);
-        $commentText          = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?\S+)?)?)?)@', '<a href="$1" target="_blank">$1</a>', $commentText);
+        $commentText          = encodePreservingBr((string) $cdrow['commenttxt']);
+        $commentText          = preg_replace('@(https?://([-\w\.]+)+(:\d+)?(/([\w/_\.]*(\?[^\s<]+)?)?)?)@', '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>', $commentText);
         $coment['commenttxt'] = $commentText;
-        if ($cdrow['editname'] != "") {
+        if (!empty($cdrow['edittime'])) {
             $coment['edittime'] = Config::time($cdrow['edittime']);
             $coment['editname'] = $commentsHideAdmin ? '' : $cdrow['editname'];
         } else {
@@ -1098,8 +1168,18 @@ if (isset($_GET["comment"])) {
     $ceditPage = isset($_GET["page"]) ? (int) $_GET["page"] : -1;
     $ceditCtype = (string) $_GET["ctype"];
     $ceditCid   = isset($_GET["cid"]) ? (int) $_GET["cid"] : '';
+    $ceditCanEdit = $canComment && (
+        !isset($_GET["cid"])
+        || ($ceditdata
+            && ((int) $ceditdata['aid'] === $userbank->GetAid() || $canDeleteComment))
+    );
 }
-$ceditBid = (isset($_GET["comment"]) && $view_comments) ? (int) $_GET["comment"] : false;
+$ceditBid = (
+    isset($_GET["comment"])
+    && (string) ($_GET["ctype"] ?? '') === 'C'
+    && $ceditParentExists
+    && (!isset($_GET["cid"]) || $ceditdata !== false)
+) ? $ceditParentId : false;
 //----------------------------------------
 
 unset($_SESSION['CountryFetchHndl']);
@@ -1226,10 +1306,11 @@ $can_delete_comm  = $perms['can_owner'] || $perms['can_delete_ban'];
     can_edit_comm:            $can_edit_comm,
     can_unmute_gag:           $can_unmute_gag,
     can_delete_comm:          $can_delete_comm,
+    can_comment:              $canComment,
     is_filtered:              $commsIsFiltered,
     comment:                  $ceditBid,
     commenttype:              $ceditType,
-    canedit:                  $userbank->is_admin(),
+    canedit:                  $ceditCanEdit,
     commenttext:              $ceditText,
     ctype:                    $ceditCtype,
     cid:                      $ceditCid,
